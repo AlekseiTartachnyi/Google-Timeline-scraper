@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "timeline-scraper"
+version = "0.1.0"
+description = "ADB-driven Google Maps Timeline scraper for mileage export"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+ocr = ["Pillow>=10.0", "pytesseract>=0.3"]
+dev = ["pytest>=7.0", "pytest-cov"]
+
+[project.scripts]
+timeline-scraper = "timeline_scraper.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
