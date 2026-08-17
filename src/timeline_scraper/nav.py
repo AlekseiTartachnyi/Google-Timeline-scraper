@@ -18,7 +18,10 @@ _MAX_ATTEMPTS = 3
 
 
 def launch_maps(serial: str | None = None) -> None:
-    """Launch Google Maps via am start and wait for it to load."""
+    """Force-stop Maps then launch it fresh so no previous state is restored."""
+    logger.info("Force-stopping Google Maps to clear previous state")
+    shell(f"am force-stop {_MAPS_PACKAGE}", serial=serial)
+    time.sleep(0.5)
     logger.info("Launching Google Maps")
     shell(
         f"am start -n {_MAPS_PACKAGE}/{_MAPS_ACTIVITY}",
