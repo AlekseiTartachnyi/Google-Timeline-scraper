@@ -82,9 +82,8 @@ def dump_ui(serial: str | None = None) -> ET.Element:
 
 
 def wake_screen(serial: str | None = None) -> None:
-    """Wake the screen and keep it on while USB is connected."""
+    """Wake the screen if it is off."""
     shell("input keyevent KEYCODE_WAKEUP", serial=serial)
-    shell("svc power stayon usb", serial=serial)
 
 
 def screencap(serial: str | None = None) -> bytes:
