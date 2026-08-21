@@ -86,6 +86,12 @@ def wake_screen(serial: str | None = None) -> None:
     shell("input keyevent KEYCODE_WAKEUP", serial=serial)
 
 
+def is_locked(serial: str | None = None) -> bool:
+    """Return True if the keyguard (lock screen) is currently showing."""
+    out = shell("dumpsys keyguard", serial=serial)
+    return "isKeyguardShowing=true" in out or "mKeyguardShowing=true" in out
+
+
 def screencap(serial: str | None = None) -> bytes:
     """Capture a screenshot and return raw PNG bytes.
 
