@@ -87,9 +87,25 @@ def wake_screen(serial: str | None = None) -> None:
 
 
 def is_locked(serial: str | None = None) -> bool:
-    """Return True if the keyguard (lock screen) is currently showing."""
-    out = shell("dumpsys keyguard", serial=serial)
-    return "isKeyguardShowing=true" in out or "mKeyguardShowing=true" in out
+    """Return True if the lock screen is currently showing.
+
+    Tries multiple detection methods because the output format of dumpsys
+    varies across Android versions.
+    """
+    keyguard = shell("dumpsys keyguard", serial=serial)
+    if any(m in keyguard for m in ("isKeyguardShowing=true", "mKeyguardShowing=true", "showing=true")):
+        return True
+
+    window = shell("dumpsys window", serial=serial)
+    if "mDreamingLockscreen=true" in window or "isStatusBarKeyguard=true" in window:
+        return True
+
+    power = shell("dumpsys power", serial=serial)
+    if "mWakefulness=Asleep" in power or "mWakefulness=Dozing" in power:
+        return True
+
+    logger.debug("Lock detection found no match; assuming unlocked")
+    return False
 
 
 def screencap(serial: str | None = None) -> bytes:
