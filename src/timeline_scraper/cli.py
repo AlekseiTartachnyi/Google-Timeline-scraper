@@ -3,10 +3,11 @@
 import argparse
 import logging
 import sys
+import time
 
 from .adb import ADBError, devices, dump_ui, is_locked, wake_screen
 from .extract import flatten, log_nodes
-from .nav import launch_maps, reach_timeline
+from .nav import find_element_by_text, launch_maps, reach_timeline, tap_element
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,21 @@ def cmd_scrape(args: argparse.Namespace) -> int:
         launch_maps(serial=serial)
         reach_timeline(serial=serial)
         logger.info("M2.1 — dumping Timeline screen to locate the date picker")
-        log_nodes(flatten(dump_ui(serial=serial)))
+        root = dump_ui(serial=serial)
+        log_nodes(flatten(root))
+
+        today_node = find_element_by_text(root, "Today")
+        if today_node is None:
+            logger.warning("M2.1 — 'Today' element not found; skipping the tap experiment")
+        else:
+            logger.info(
+                "M2.1 — tapping 'Today' (sits next to 'Previous day') "
+                "to test it as the date-picker trigger"
+            )
+            tap_element(today_node, serial=serial)
+            time.sleep(1.5)
+            logger.info("M2.1 — screen after tapping 'Today':")
+            log_nodes(flatten(dump_ui(serial=serial)))
     except ADBError as exc:
         logger.error("ADB error: %s", exc)
         return 1

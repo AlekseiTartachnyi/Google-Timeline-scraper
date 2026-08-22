@@ -60,7 +60,7 @@ def _parse_bounds_center(bounds: str) -> tuple[int, int]:
     return (left + right) // 2, (top + bottom) // 2
 
 
-def _tap_node(node: ET.Element, serial: str | None = None) -> None:
+def tap_element(node: ET.Element, serial: str | None = None) -> None:
     """Tap the center of a UI node using its bounds attribute."""
     bounds = node.get("bounds", "")
     if not bounds:
@@ -116,7 +116,7 @@ def reach_timeline(serial: str | None = None) -> None:
         node = _find_timeline_element(root)
         if node is not None and node.get("clickable") == "true":
             logger.info("Tapping visible Timeline element: %r", node.get("text"))
-            _tap_node(node, serial=serial)
+            tap_element(node, serial=serial)
             time.sleep(_TAP_WAIT_S)
             if _is_on_timeline(dump_ui(serial=serial)):
                 logger.info("Reached Timeline screen")
@@ -126,13 +126,13 @@ def reach_timeline(serial: str | None = None) -> None:
         profile = _find_profile_button(root)
         if profile is not None:
             logger.info("Opening profile menu")
-            _tap_node(profile, serial=serial)
+            tap_element(profile, serial=serial)
             time.sleep(_TAP_WAIT_S)
             root = dump_ui(serial=serial)
             node = _find_timeline_element(root)
             if node is not None:
                 logger.info("Tapping Timeline in profile menu: %r", node.get("text"))
-                _tap_node(node, serial=serial)
+                tap_element(node, serial=serial)
                 time.sleep(_TAP_WAIT_S)
                 if _is_on_timeline(dump_ui(serial=serial)):
                     logger.info("Reached Timeline screen")
