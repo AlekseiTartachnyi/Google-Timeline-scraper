@@ -3,11 +3,16 @@
 import argparse
 import logging
 import sys
+from datetime import date
 
-from .adb import ADBError, devices, is_locked, wake_screen
-from .nav import launch_maps, reach_timeline
+from .adb import ADBError, devices, dump_ui, is_locked, wake_screen
+from .extract import flatten, log_nodes
+from .nav import go_to_date, launch_maps, reach_timeline
 
 logger = logging.getLogger(__name__)
+
+# M2 test date (spec: dates are hardcoded through M1-M5); Thursday, Aug 20 2026.
+_M2_TEST_DATE = date(2026, 8, 20)
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -56,6 +61,12 @@ def cmd_scrape(args: argparse.Namespace) -> int:
             input("  Phone is locked. Unlock it and press Enter to continue...")
         launch_maps(serial=serial)
         reach_timeline(serial=serial)
+
+        logger.info("M2.1 — opening calendar and selecting %s", _M2_TEST_DATE.isoformat())
+        go_to_date(_M2_TEST_DATE, serial=serial)
+
+        logger.info("M2.1 — screen after selecting the date:")
+        log_nodes(flatten(dump_ui(serial=serial)))
     except ADBError as exc:
         logger.error("ADB error: %s", exc)
         return 1
