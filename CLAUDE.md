@@ -45,9 +45,15 @@ for the console log or JSON/XML the user captured by running `scrape` locally, t
 Whatever branch the current session/task was assigned — check the task instructions, not
 this file. `main` is the up-to-date integration branch after merges.
 
-If local files seem wrong (errors from code you didn't write), diff against `origin/main`
-rather than resetting to a specific milestone branch name — an old milestone branch (e.g.
-M1's) is behind `main` once later work has merged, and resetting to it discards that work.
+If the user asks to roll back / reset because of a problem, target `origin/main` —
+never an old milestone branch name (M1, M2, ...): those fall behind `main` once later
+work has merged, and resetting to one discards that merged work. Check `git status` first
+and stash or commit anything uncommitted, then:
+
+```
+git fetch origin main
+git reset --hard origin/main
+```
 
 ## Key rules (from spec)
 

@@ -1,12 +1,15 @@
 """CLI entrypoint — scrape and flatten commands."""
 
 import argparse
+import json
 import logging
 import sys
+from dataclasses import asdict
 from datetime import date
+from pathlib import Path
 
-from .adb import ADBError, devices, dump_ui, is_locked, wake_screen
-from .extract import flatten, log_nodes
+from .adb import ADBError, devices, is_locked, wake_screen
+from .extract import capture_day_rows
 from .nav import go_to_date, launch_maps, reach_timeline
 
 logger = logging.getLogger(__name__)
@@ -29,9 +32,9 @@ def _setup_logging(verbose: bool) -> None:
 # ---------------------------------------------------------------------------
 
 def cmd_scrape(args: argparse.Namespace) -> int:
-    """Preflight check + reach the Timeline screen (M1).
+    """Preflight, reach Timeline, capture one hardcoded day to a draft JSON (M2.2).
 
-    Date range capture and JSON output are added in M2–M3.
+    Multi-day looping and crash-safe incremental save are added in M3.
     """
     _setup_logging(args.verbose)
 
@@ -65,8 +68,25 @@ def cmd_scrape(args: argparse.Namespace) -> int:
         logger.info("M2.1 — opening calendar and selecting %s", _M2_TEST_DATE.isoformat())
         go_to_date(_M2_TEST_DATE, serial=serial)
 
-        logger.info("M2.1 — screen after selecting the date:")
-        log_nodes(flatten(dump_ui(serial=serial)))
+        logger.info("M2.2 — capturing %s, scrolling to the end of the day", _M2_TEST_DATE.isoformat())
+        rows = capture_day_rows(serial=serial)
+        logger.info("M2.2 — captured %d rows", len(rows))
+        for i, row in enumerate(rows):
+            preview = " | ".join(n.text or n.content_desc for n in row if n.text or n.content_desc)
+            logger.info("  row %3d: %s", i, preview)
+
+        out_dir = Path("exports")
+        out_dir.mkdir(exist_ok=True)
+        out_path = out_dir / f"timeline_{_M2_TEST_DATE.isoformat()}.draft.json"
+        draft = {
+            "date": _M2_TEST_DATE.isoformat(),
+            "rows": [
+                {"row_index": i, "nodes": [asdict(n) for n in row]}
+                for i, row in enumerate(rows)
+            ],
+        }
+        out_path.write_text(json.dumps(draft, indent=2, ensure_ascii=False), encoding="utf-8")
+        logger.info("M2.2 — wrote draft JSON to %s", out_path)
     except ADBError as exc:
         logger.error("ADB error: %s", exc)
         return 1
@@ -74,7 +94,7 @@ def cmd_scrape(args: argparse.Namespace) -> int:
         logger.error("%s", exc)
         return 1
 
-    logger.info("M1 complete — Timeline screen reached")
+    logger.info("M2.2 draft complete — %d rows written to %s", len(rows), out_path)
     return 0
 
 

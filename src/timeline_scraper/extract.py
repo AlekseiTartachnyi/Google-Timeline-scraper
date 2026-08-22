@@ -1,10 +1,16 @@
 """Flatten a uiautomator UI dump into ordered, inspectable element records."""
 
 import logging
+import time
 from dataclasses import dataclass
 from xml.etree import ElementTree as ET
 
+from .adb import dump_ui, swipe
+
 logger = logging.getLogger(__name__)
+
+_ROW_GAP_PX = 12  # placeholder threshold; tune once a real Timeline dump is available
+_SCROLL_WAIT_S = 1.0
 
 
 @dataclass
@@ -62,3 +68,110 @@ def log_nodes(nodes: list[UiNode]) -> None:
             n.clickable,
             n.bounds,
         )
+
+
+def _bounds_box(bounds: str) -> tuple[int, int, int, int] | None:
+    """Parse a bounds string '[l,t][r,b]' into (left, top, right, bottom).
+
+    Returns None if bounds is empty or malformed.
+    """
+    if not bounds:
+        return None
+    try:
+        left, top, right, bottom = (
+            int(c) for c in bounds.replace("][", ",").strip("[]").split(",")
+        )
+        return left, top, right, bottom
+    except ValueError:
+        return None
+
+
+def group_rows(nodes: list[UiNode], row_gap: int = _ROW_GAP_PX) -> list[list[UiNode]]:
+    """Cluster a flat, ordered node list into rows by vertical bounds gaps.
+
+    A new row starts whenever a node's top sits more than `row_gap` pixels
+    below the running bottom of the current row. Nodes with unparsable
+    bounds are kept in whatever row is currently open rather than dropped.
+
+    This is a first-pass heuristic, not verified against a real Timeline
+    dump yet: it assumes a card/list layout where entries stack vertically
+    and don't rely on resource-id naming, which Compose-based screens often
+    lack. `row_gap` is a placeholder and will likely need retuning once a
+    real dump is available.
+    """
+    rows: list[list[UiNode]] = []
+    current: list[UiNode] = []
+    current_bottom: int | None = None
+
+    for node in nodes:
+        box = _bounds_box(node.bounds)
+        if box is None:
+            current.append(node)
+            continue
+        _, top, _, bottom = box
+        if current and current_bottom is not None and top - current_bottom > row_gap:
+            rows.append(current)
+            current = []
+        current.append(node)
+        current_bottom = bottom if current_bottom is None else max(current_bottom, bottom)
+
+    if current:
+        rows.append(current)
+    return rows
+
+
+def _row_signature(row: list[UiNode]) -> tuple[tuple[str, str], ...]:
+    """Return a content-based identity for a row, ignoring position/bounds.
+
+    Used to recognize the same entry reappearing after a scroll, since its
+    bounds shift but its text/content-desc do not.
+    """
+    return tuple((n.text, n.content_desc) for n in row)
+
+
+def capture_day_rows(serial: str | None = None, max_scrolls: int = 200) -> list[list[UiNode]]:
+    """Scroll the current Timeline day screen top to bottom, collecting every row.
+
+    Repeatedly dumps the UI and groups nodes into rows (see `group_rows`),
+    appending rows not already seen — by content signature — to an
+    accumulated, ordered list. Stops once a scroll adds no new rows, or
+    after `max_scrolls` swipes as a safety cap against a runaway loop.
+    """
+    seen: set[tuple[tuple[str, str], ...]] = set()
+    all_rows: list[list[UiNode]] = []
+    scroll_count = 0
+
+    while True:
+        root = dump_ui(serial=serial)
+        rows = group_rows(flatten(root))
+        new_rows = [r for r in rows if _row_signature(r) not in seen]
+        for row in new_rows:
+            seen.add(_row_signature(row))
+            all_rows.append(row)
+
+        logger.info(
+            "Dump %d: %d rows on screen, %d new (%d total)",
+            scroll_count, len(rows), len(new_rows), len(all_rows),
+        )
+
+        if scroll_count > 0 and not new_rows:
+            logger.info("No new rows after scrolling — reached the end of the day")
+            break
+        if scroll_count >= max_scrolls:
+            logger.warning("Hit max_scrolls (%d) without confirming the end of the day", max_scrolls)
+            break
+
+        first_node = next(root.iter("node"), None)
+        box = _bounds_box(first_node.get("bounds", "")) if first_node is not None else None
+        if box is None:
+            logger.warning("Could not read screen bounds for swipe; stopping")
+            break
+        left, top, right, bottom = box
+        x = (left + right) // 2
+        y_start = top + int(0.8 * (bottom - top))
+        y_end = top + int(0.2 * (bottom - top))
+        swipe(x, y_start, x, y_end, serial=serial)
+        time.sleep(_SCROLL_WAIT_S)
+        scroll_count += 1
+
+    return all_rows
