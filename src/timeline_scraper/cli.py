@@ -4,7 +4,8 @@ import argparse
 import logging
 import sys
 
-from .adb import ADBError, devices, is_locked, wake_screen
+from .adb import ADBError, devices, dump_ui, is_locked, wake_screen
+from .extract import flatten, log_nodes
 from .nav import launch_maps, reach_timeline
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,8 @@ def cmd_scrape(args: argparse.Namespace) -> int:
             input("  Phone is locked. Unlock it and press Enter to continue...")
         launch_maps(serial=serial)
         reach_timeline(serial=serial)
+        logger.info("M2.1 — dumping Timeline screen to locate the date picker")
+        log_nodes(flatten(dump_ui(serial=serial)))
     except ADBError as exc:
         logger.error("ADB error: %s", exc)
         return 1
