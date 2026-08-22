@@ -9,7 +9,6 @@ from .adb import dump_ui, swipe
 
 logger = logging.getLogger(__name__)
 
-_ROW_GAP_PX = 12  # placeholder threshold; tune once a real Timeline dump is available
 _SCROLL_WAIT_S = 1.0
 
 
@@ -86,34 +85,30 @@ def _bounds_box(bounds: str) -> tuple[int, int, int, int] | None:
         return None
 
 
-def group_rows(nodes: list[UiNode], row_gap: int = _ROW_GAP_PX) -> list[list[UiNode]]:
-    """Cluster a flat, ordered node list into rows by vertical bounds gaps.
+def group_rows(nodes: list[UiNode]) -> list[list[UiNode]]:
+    """Cluster a flat, ordered node list into rows, using content_desc as
+    the row-start signal.
 
-    A new row starts whenever a node's top sits more than `row_gap` pixels
-    below the running bottom of the current row. Nodes with unparsable
-    bounds are kept in whatever row is currently open rather than dropped.
-
-    This is a first-pass heuristic, not verified against a real Timeline
-    dump yet: it assumes a card/list layout where entries stack vertically
-    and don't rely on resource-id naming, which Compose-based screens often
-    lack. `row_gap` is a placeholder and will likely need retuning once a
-    real dump is available.
+    Bounds can't be used for this: on a real dump, most Timeline entries
+    report bounds "[0,0][0,0]" once they're off the physical screen
+    (virtualized/recycled by the list), even though their text/content_desc
+    is still present in the tree. What real dumps show instead is that each
+    entry — a visit, a trip segment, a "Missing travel" gap, a "Yes"/"Edit"
+    action — carries its full description as one Button's content_desc. So
+    a new row starts at every node with a non-empty content_desc; anything
+    else (icon-only companion buttons with no label, or a plain-text
+    sub-block like a "Places: Target, Department store" guess) attaches to
+    whatever row is currently open, so it's kept without becoming a row
+    boundary itself.
     """
     rows: list[list[UiNode]] = []
     current: list[UiNode] = []
-    current_bottom: int | None = None
 
     for node in nodes:
-        box = _bounds_box(node.bounds)
-        if box is None:
-            current.append(node)
-            continue
-        _, top, _, bottom = box
-        if current and current_bottom is not None and top - current_bottom > row_gap:
+        if node.content_desc and current:
             rows.append(current)
             current = []
         current.append(node)
-        current_bottom = bottom if current_bottom is None else max(current_bottom, bottom)
 
     if current:
         rows.append(current)
