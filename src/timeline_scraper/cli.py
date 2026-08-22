@@ -4,7 +4,7 @@ import argparse
 import logging
 import sys
 
-from .adb import ADBError, devices
+from .adb import ADBError, devices, is_locked, wake_screen
 from .nav import launch_maps, reach_timeline
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,9 @@ def cmd_scrape(args: argparse.Namespace) -> int:
         logger.info("Device: %s", serial)
 
     try:
+        wake_screen(serial=serial)
+        if is_locked(serial=serial):
+            input("  Phone is locked. Unlock it and press Enter to continue...")
         launch_maps(serial=serial)
         reach_timeline(serial=serial)
     except ADBError as exc:

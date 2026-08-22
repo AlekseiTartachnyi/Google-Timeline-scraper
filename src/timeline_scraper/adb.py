@@ -81,6 +81,33 @@ def dump_ui(serial: str | None = None) -> ET.Element:
         Path(local).unlink(missing_ok=True)
 
 
+def wake_screen(serial: str | None = None) -> None:
+    """Wake the screen if it is off."""
+    shell("input keyevent KEYCODE_WAKEUP", serial=serial)
+
+
+def is_locked(serial: str | None = None) -> bool:
+    """Return True if the lock screen is currently showing.
+
+    Tries multiple detection methods because the output format of dumpsys
+    varies across Android versions.
+    """
+    keyguard = shell("dumpsys keyguard", serial=serial)
+    if any(m in keyguard for m in ("isKeyguardShowing=true", "mKeyguardShowing=true", "showing=true")):
+        return True
+
+    window = shell("dumpsys window", serial=serial)
+    if "mDreamingLockscreen=true" in window or "isStatusBarKeyguard=true" in window:
+        return True
+
+    power = shell("dumpsys power", serial=serial)
+    if "mWakefulness=Asleep" in power or "mWakefulness=Dozing" in power:
+        return True
+
+    logger.debug("Lock detection found no match; assuming unlocked")
+    return False
+
+
 def screencap(serial: str | None = None) -> bytes:
     """Capture a screenshot and return raw PNG bytes.
 
