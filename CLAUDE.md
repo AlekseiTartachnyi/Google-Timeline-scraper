@@ -16,6 +16,21 @@ py -m timeline_scraper scrape
 On Windows use `py`, not `python`. The `python` command is intercepted by a Windows
 App Execution Alias and redirects to the Microsoft Store.
 
+## Execution environment — read this once, do not re-derive or re-explain it
+
+Sessions for this project run in two different places:
+
+- **Local (user's laptop/Mac Mini)** — a real Pixel is plugged in over USB, `adb` is
+  installed, `adb devices` shows the phone. `scrape` actually drives the phone here.
+- **Cloud (Claude Code on the web)** — an isolated container. No USB, no phone, `adb`
+  isn't even installed. `scrape` cannot execute here.
+
+If `adb`/a device is missing in the current session, that's just which of the two this
+session is — not a bug in `adb.py`/`nav.py`, not something to fix, and not something to
+explain to the user again. They already know; they run the device side themselves. When
+real UI-tree structure or output is needed to design or verify extraction logic, ask once
+for the console log or JSON/XML the user captured by running `scrape` locally, then move on.
+
 ## Current milestone status
 
 - [x] M1 — ADB preflight, wake screen, launch Maps, navigate to Timeline
@@ -27,14 +42,12 @@ App Execution Alias and redirects to the Microsoft Store.
 
 ## Working branch
 
-`claude/zealous-galileo-l47rdd`
+Whatever branch the current session/task was assigned — check the task instructions, not
+this file. `main` is the up-to-date integration branch after merges.
 
-If local files seem wrong (errors from code you didn't write), reset to the clean branch:
-
-```
-git fetch origin
-git reset --hard origin/claude/zealous-galileo-l47rdd
-```
+If local files seem wrong (errors from code you didn't write), diff against `origin/main`
+rather than resetting to a specific milestone branch name — an old milestone branch (e.g.
+M1's) is behind `main` once later work has merged, and resetting to it discards that work.
 
 ## Key rules (from spec)
 
