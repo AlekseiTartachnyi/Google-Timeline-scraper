@@ -5,7 +5,7 @@ import json
 import logging
 import sys
 from dataclasses import asdict
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from .adb import ADBError, devices, is_locked, wake_screen
@@ -77,7 +77,11 @@ def cmd_scrape(args: argparse.Namespace) -> int:
 
         out_dir = Path("exports")
         out_dir.mkdir(exist_ok=True)
-        out_path = out_dir / f"timeline_{_M2_TEST_DATE.isoformat()}.draft.json"
+        # Colons aren't valid in Windows filenames, so HH-MM uses a dash
+        # instead -- lets you tell draft runs apart and eyeball how long a
+        # capture took against the console log's own timestamps.
+        saved_at = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        out_path = out_dir / f"timeline_{_M2_TEST_DATE.isoformat()}.draft.{saved_at}.json"
         draft = {
             "date": _M2_TEST_DATE.isoformat(),
             "rows": [
