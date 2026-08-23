@@ -85,26 +85,57 @@ def _bounds_box(bounds: str) -> tuple[int, int, int, int] | None:
         return None
 
 
+_CHROME_CONTENT_DESC = {
+    "Backup enabled.",
+    "Close",
+    "Timeline is on",
+    "Past visits layer is off",
+    "Previous day",
+    "Next day",
+}
+
+
+def _is_noise(node: UiNode) -> bool:
+    """Return True for a node that carries nothing useful for day analysis.
+
+    Three cases, all confirmed against a real dump rather than guessed:
+    an element with neither text nor content_desc (an icon button with no
+    accessible label -- pure clutter); the fixed top app-bar / map-layer /
+    date-nav chrome, matched by its exact, always-the-same content_desc
+    (it reads identically regardless of which date is showing, so it's
+    never day content); and the Day/Trips/Insights/Places/Cities/World tab
+    bar, matched by its resource-id.
+    """
+    if not node.text and not node.content_desc:
+        return True
+    if node.content_desc in _CHROME_CONTENT_DESC:
+        return True
+    if node.resource_id.startswith("tab"):
+        return True
+    return False
+
+
 def group_rows(nodes: list[UiNode]) -> list[list[UiNode]]:
     """Cluster a flat, ordered node list into rows, using content_desc as
-    the row-start signal.
+    the row-start signal, after dropping noise nodes (see `_is_noise`).
 
-    Bounds can't be used for this: on a real dump, most Timeline entries
-    report bounds "[0,0][0,0]" once they're off the physical screen
+    Bounds can't be used for row boundaries: on a real dump, most Timeline
+    entries report bounds "[0,0][0,0]" once they're off the physical screen
     (virtualized/recycled by the list), even though their text/content_desc
     is still present in the tree. What real dumps show instead is that each
     entry — a visit, a trip segment, a "Missing travel" gap, a "Yes"/"Edit"
     action — carries its full description as one Button's content_desc. So
     a new row starts at every node with a non-empty content_desc; anything
-    else (icon-only companion buttons with no label, or a plain-text
-    sub-block like a "Places: Target, Department store" guess) attaches to
-    whatever row is currently open, so it's kept without becoming a row
-    boundary itself.
+    else (a plain-text sub-block like a "Places: Target, Department store"
+    guess) attaches to whatever row is currently open, so it's kept without
+    becoming a row boundary itself.
     """
     rows: list[list[UiNode]] = []
     current: list[UiNode] = []
 
     for node in nodes:
+        if _is_noise(node):
+            continue
         if node.content_desc and current:
             rows.append(current)
             current = []
@@ -112,6 +143,13 @@ def group_rows(nodes: list[UiNode]) -> list[list[UiNode]]:
 
     if current:
         rows.append(current)
+
+    # A leading row with no content_desc at all is whatever preceded the
+    # day's first real entry (page title, date button, day-summary stats)
+    # -- not day content, and the date's already in the output separately.
+    if rows and not any(n.content_desc for n in rows[0]):
+        rows.pop(0)
+
     return rows
 
 
