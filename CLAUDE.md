@@ -112,12 +112,14 @@ Rules that must not be relaxed:
 ```
 src/timeline_scraper/
     cli.py      — argparse entrypoint (scrape / flatten)
-    adb.py      — adb wrappers: devices, shell, tap, swipe, dump_ui, wake_screen, is_locked
+    adb.py      — adb wrappers: devices, shell, tap, swipe, keyevent, dump_ui, screencap
     nav.py      — launch Maps, navigate to Timeline by accessibility tree text
     model.py    — Visit / Trip / Day dataclasses + JSON serialization
     extract.py  — UI dump -> ordered descriptions, scroll + dedupe, bounds helper
     parse.py    — descriptions -> visits and trips, endpoint linking
+    focus.py    — D-pad focus navigation: no coordinates, no taps on the map
     capture.py  — second pass: open each driving trip, wait for the map, screenshot
+    probe.py    — measurement run behind `scrape --probe-focus`, writes dumps to disk
     flatten.py  — (M4) JSON -> CSV
 ```
 

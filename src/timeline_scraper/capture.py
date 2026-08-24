@@ -1,7 +1,10 @@
 """Second pass over a scraped day: open each driving trip and save its map.
 
-The list pass and this pass are kept apart on purpose. Tapping a row replaces
+The list pass and this pass are kept apart on purpose. Opening a row replaces
 the screen, which would break the scroll-and-merge loop that builds the day.
+
+Rows are reached with D-pad focus, not with taps at reported coordinates —
+see focus.py for why coordinates cannot be trusted here.
 """
 
 import logging
@@ -9,53 +12,39 @@ import re
 import time
 from pathlib import Path
 
-from . import adb
-from .extract import flatten, parse_bounds_center, scroll_to_top
+from . import adb, focus
+from .extract import descriptions, flatten
 from .model import Day, Trip
 
 logger = logging.getLogger(__name__)
 
-_MAX_TAPS = 3
-_AFTER_TAP_S = 0.8
-_AFTER_BACK_S = 1.0
+_ACTIVATE_KEYS = (focus.CENTER, focus.ENTER)
+_AFTER_ACTIVATE_S = 0.9
 _MIN_SETTLE_S = 1.2
 _POLL_S = 0.4
 _MAX_SETTLE_S = 8.0
-_MAX_SCROLL_PASSES = 40
+_MAX_STEPS_PER_SWEEP = 400
+_MAX_SWEEPS = 6
 
 
 def _visible_descriptions(serial: str | None) -> list[str]:
     """Return the accessibility descriptions currently on screen."""
-    return [n.content_desc for n in flatten(adb.dump_ui(serial=serial)) if n.content_desc]
+    return descriptions(flatten(adb.dump_ui(serial=serial)))
 
 
-def _find_tappable(descriptions_on_screen: list[str], target: str) -> bool:
-    """Return True if the target row is currently on screen."""
-    return target in descriptions_on_screen
+def _on_day_list(day_rows: set[str], serial: str | None) -> bool:
+    """Return True if the day list is the screen in front of us.
 
-
-def _tap_target(target: str, serial: str | None) -> bool:
-    """Tap the row with this description. Returns False if it is not on screen."""
-    for node in flatten(adb.dump_ui(serial=serial)):
-        if node.content_desc != target:
-            continue
-        point = parse_bounds_center(node.bounds)
-        if point is None:
-            return False
-        adb.tap(*point, serial=serial)
-        return True
-    return False
+    Judged from the day's own rows: several of them share the screen on the
+    day list, and none of them survives on a trip screen.
+    """
+    return len(set(_visible_descriptions(serial)) & day_rows) >= 2
 
 
 def _opened(target: str, day_rows: set[str], serial: str | None) -> bool:
-    """Return True if the trip detail screen appears to be open.
-
-    Judged from the day's own rows rather than from any assumed label: on the
-    day list many of them are on screen at once, on a trip screen they are gone.
-    """
+    """Return True if the trip detail screen appears to be open."""
     on_screen = set(_visible_descriptions(serial))
-    remaining = (on_screen & day_rows) - {target}
-    return len(remaining) < 2
+    return len((on_screen & day_rows) - {target}) < 2
 
 
 def _wait_for_map(serial: str | None) -> tuple[bytes, int, bool]:
@@ -77,16 +66,6 @@ def _wait_for_map(serial: str | None) -> tuple[bytes, int, bool]:
     return previous, int(waited * 1000), False
 
 
-def _go_back(day_rows: set[str], serial: str | None) -> bool:
-    """Press Back and confirm the day list is on screen again."""
-    for _ in range(2):
-        adb.shell("input keyevent KEYCODE_BACK", serial=serial)
-        time.sleep(_AFTER_BACK_S)
-        if len(set(_visible_descriptions(serial)) & day_rows) >= 2:
-            return True
-    return False
-
-
 def _hhmm(clock: str | None) -> str:
     """Return '1:21 PM' as '1321' so file names sort in trip order."""
     if not clock:
@@ -106,19 +85,32 @@ def _file_name(trip: Trip) -> str:
     return f"{_hhmm(trip.start_time)}-{_hhmm(trip.end_time)}_{mode}.png"
 
 
-def _capture_one(trip: Trip, day_rows: set[str], out_dir: Path, serial: str | None) -> bool:
-    """Open one trip, save its map screenshot, and return to the day list."""
-    target = trip.raw_text
-    for attempt in range(1, _MAX_TAPS + 1):
-        if not _tap_target(target, serial=serial):
-            logger.debug("Row not tappable on screen: %r", target)
-            return False
-        time.sleep(_AFTER_TAP_S)
+def _open_focused(target: str, day_rows: set[str], serial: str | None) -> bool:
+    """Activate the focused row and confirm the trip screen replaced the list."""
+    for key in _ACTIVATE_KEYS:
+        focus.press(key, serial=serial, settle_s=_AFTER_ACTIVATE_S)
         if _opened(target, day_rows, serial=serial):
-            break
-        logger.info("Trip did not open on tap %d/%d, retrying", attempt, _MAX_TAPS)
-    else:
-        logger.warning("Could not open trip after %d taps: %r", _MAX_TAPS, target)
+            return True
+        logger.debug("%s did not open the trip screen", key)
+    return False
+
+
+def _return_to_list(day_rows: set[str], serial: str | None) -> bool:
+    """Press Back until the day list is on screen again."""
+    for _ in range(3):
+        focus.back(serial=serial)
+        if _on_day_list(day_rows, serial=serial):
+            return True
+    return False
+
+
+def _capture_focused(
+    trip: Trip, day_rows: set[str], out_dir: Path, serial: str | None
+) -> bool:
+    """Open the currently focused trip row, save its map, and come back."""
+    target = trip.raw_text
+    if not _open_focused(target, day_rows, serial=serial):
+        logger.warning("Row would not open: %r", target)
         return False
 
     png, waited_ms, settled = _wait_for_map(serial=serial)
@@ -129,7 +121,7 @@ def _capture_one(trip: Trip, day_rows: set[str], out_dir: Path, serial: str | No
         "Saved %s (%d ms%s)", trip.screenshot, waited_ms, "" if settled else ", still changing"
     )
 
-    if not _go_back(day_rows, serial=serial):
+    if not _return_to_list(day_rows, serial=serial):
         raise RuntimeError("Back did not return to the Timeline day list")
     return True
 
@@ -142,8 +134,9 @@ def capture_trip_maps(
 ) -> int:
     """Save a map screenshot for every trip of the given modes. Returns the count.
 
-    Rows are located by their accessibility description on each pass, never by
-    remembered coordinates: both scrolling and Back move them.
+    Walks the list with D-pad focus. Every row is identified from the dump
+    while it holds focus, so the row about to be opened is known by name and
+    no coordinate is ever used.
     """
     targets = {t.raw_text: t for t in day.trips if t.mode in modes}
     if not targets:
@@ -152,34 +145,49 @@ def capture_trip_maps(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     day_rows = {s.raw_text for s in day.segments if s.raw_text}
-    width, height = adb.screen_size(serial=serial)
-    x = width // 2
-
-    logger.info("Capturing maps for %d trips", len(targets))
-    scroll_to_top(serial=serial)
-
+    pending = dict(targets)
     done: set[str] = set()
-    failed: set[str] = set()
-    for _ in range(_MAX_SCROLL_PASSES):
-        if len(done | failed) == len(targets):
+
+    logger.info("Capturing maps for %d trip(s) by focus navigation", len(targets))
+
+    for sweep in range(1, _MAX_SWEEPS + 1):
+        if not pending:
             break
-        on_screen = _visible_descriptions(serial)
-        progressed = False
-        for target, trip in targets.items():
-            if target in done or target in failed:
-                continue
-            if not _find_tappable(on_screen, target):
-                continue
-            if _capture_one(trip, day_rows, out_dir, serial=serial):
-                done.add(target)
-            else:
-                failed.add(target)
-            progressed = True
-            break  # the screen moved; re-read it before the next target
-        if progressed:
-            continue
-        adb.swipe(x, int(height * 0.80), x, int(height * 0.35), 400, serial=serial)
-        time.sleep(0.6)
+        focus.to_start(serial=serial)
+        node = focus.establish(serial=serial)
+        if node is None:
+            logger.error(
+                "This screen does not take D-pad focus — no node reports focused=true "
+                "after %s. Run 'scrape --probe-focus' and inspect the saved dumps.",
+                focus.DOWN,
+            )
+            return len(done)
+
+        logger.info("Sweep %d — focus starts on %s", sweep, focus.label(node))
+        captured_here = 0
+        for _ in range(_MAX_STEPS_PER_SWEEP):
+            if not pending:
+                break
+            desc = node.content_desc
+            if desc in pending:
+                trip = pending.pop(desc)
+                logger.info("Opening focused row: %r", desc)
+                if _capture_focused(trip, day_rows, out_dir, serial=serial):
+                    done.add(desc)
+                captured_here += 1
+                # Back may have dropped or moved the highlight; only keep
+                # stepping while focus is still on the row we just left.
+                node = focus.focused_node(serial=serial)
+                if node is None or node.content_desc != desc:
+                    logger.debug("Focus did not survive Back; restarting the sweep")
+                    break
+            node, moved = focus.step(focus.DOWN, serial=serial)
+            if not moved or node is None:
+                break
+
+        if captured_here == 0:
+            logger.warning("Sweep %d reached the end without finding a pending row", sweep)
+            break
 
     missed = len(targets) - len(done)
     if missed:

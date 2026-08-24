@@ -64,6 +64,11 @@ def swipe(
     shell(f"input swipe {x1} {y1} {x2} {y2} {duration_ms}", serial=serial)
 
 
+def keyevent(key: str, serial: str | None = None) -> None:
+    """Send a key event by name, e.g. 'KEYCODE_DPAD_DOWN'."""
+    shell(f"input keyevent {key}", serial=serial)
+
+
 def dump_ui(serial: str | None = None) -> ET.Element:
     """Dump the UI hierarchy and return the parsed XML root element.
 

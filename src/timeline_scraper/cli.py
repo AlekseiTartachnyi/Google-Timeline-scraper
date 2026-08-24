@@ -12,6 +12,7 @@ from .extract import collect_day
 from .model import write_day_json
 from .nav import go_to_date, launch_maps, reach_timeline
 from .parse import build_day
+from .probe import probe_focus
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,10 @@ def cmd_scrape(args: argparse.Namespace) -> int:
 
         logger.info("Opening the calendar and selecting %s", target.isoformat())
         go_to_date(target, serial=serial)
+
+        if args.probe_focus:
+            probe_focus(out_dir, serial=serial)
+            return 0
 
         day = build_day(target.isoformat(), collect_day(serial=serial))
         write_day_json(day, json_path)
@@ -147,6 +152,12 @@ def build_parser() -> argparse.ArgumentParser:
         dest="screenshots",
         action="store_false",
         help="Skip the map screenshot pass",
+    )
+    p_scrape.add_argument(
+        "--probe-focus",
+        dest="probe_focus",
+        action="store_true",
+        help="Record how the day list responds to D-pad focus, then exit",
     )
     p_scrape.add_argument(
         "--tz",

@@ -23,6 +23,9 @@ class UiNode:
     resource_id: str
     class_name: str
     clickable: bool
+    focusable: bool
+    focused: bool
+    selected: bool
     bounds: str
 
 
@@ -38,7 +41,8 @@ def flatten(root: ET.Element) -> list[UiNode]:
         text = node.get("text", "")
         content_desc = node.get("content-desc", "")
         clickable = node.get("clickable") == "true"
-        if not text and not content_desc and not clickable:
+        focused = node.get("focused") == "true"
+        if not text and not content_desc and not clickable and not focused:
             continue
         nodes.append(
             UiNode(
@@ -48,6 +52,9 @@ def flatten(root: ET.Element) -> list[UiNode]:
                 resource_id=node.get("resource-id", ""),
                 class_name=node.get("class", ""),
                 clickable=clickable,
+                focusable=node.get("focusable") == "true",
+                focused=focused,
+                selected=node.get("selected") == "true",
                 bounds=node.get("bounds", ""),
             )
         )
@@ -59,13 +66,17 @@ def log_nodes(nodes: list[UiNode]) -> None:
     logger.info("Visible elements (%d):", len(nodes))
     for n in nodes:
         logger.info(
-            "  [%3d] text=%r desc=%r id=%r class=%r clickable=%s bounds=%s",
+            "  [%3d] text=%r desc=%r id=%r class=%r clickable=%s focusable=%s "
+            "focused=%s selected=%s bounds=%s",
             n.index,
             n.text,
             n.content_desc,
             n.resource_id,
             n.class_name,
             n.clickable,
+            n.focusable,
+            n.focused,
+            n.selected,
             n.bounds,
         )
 
@@ -73,20 +84,6 @@ def log_nodes(nodes: list[UiNode]) -> None:
 def descriptions(nodes: list[UiNode]) -> list[str]:
     """Return the accessibility descriptions of nodes that carry one, in order."""
     return [n.content_desc for n in nodes if n.content_desc]
-
-
-def scroll_to_top(serial: str | None = None, max_swipes: int = 12) -> None:
-    """Swipe the Timeline list back to the top of the day."""
-    width, height = adb.screen_size(serial=serial)
-    x = width // 2
-    seen: list[str] = []
-    for _ in range(max_swipes):
-        current = descriptions(flatten(adb.dump_ui(serial=serial)))
-        if current == seen:
-            return
-        seen = current
-        adb.swipe(x, int(height * 0.35), x, int(height * 0.80), 400, serial=serial)
-        time.sleep(_SCROLL_SETTLE_S)
 
 
 def collect_day(serial: str | None = None, max_swipes: int = 40) -> list[str]:
