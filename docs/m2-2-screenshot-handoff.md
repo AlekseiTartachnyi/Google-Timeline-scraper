@@ -1,87 +1,113 @@
-# M2.2 — trip screenshots by focus navigation
+# M2.2 — the trip screenshot pass
 
-## The defect this replaces
+## What the day screen is
 
-`capture.py` used to locate a `Driving` row in the accessibility tree and tap the centre of
-its `bounds`. The tap landed on the map above the list, the map panned, and the screenshot
-was of the day view.
-
-The root cause is that `bounds` are not proof of visibility. uiautomator reports rows sitting
-outside the scrolled viewport with ordinary-looking coordinates, and the old
-`_tap_target` rejected only `[0,0][0,0]`. A row just past the edge of the list yields a
-coordinate that falls on the map. Related: swiping the list from 35% to 80% of the screen
-drags the bottom sheet instead of the list, which enlarges the map and moves every row.
-
-Both problems are properties of coordinates. So coordinates are gone from this pass.
-
-## What it does now
-
-`focus.py` drives the list with `KEYCODE_DPAD_DOWN` / `KEYCODE_DPAD_CENTER`:
-
-- No coordinate is computed, so no tap can land on the map.
-- The framework scrolls the focused row into view itself, so "off-screen row" cannot happen.
-- The dump reports `focused="true"` on the row *before* it is activated, so the row about to
-  open is known by name and checked against `trip.raw_text`.
-- Returning to the top of the list is `KEYCODE_DPAD_UP` until focus stops moving — no swipe,
-  so the bottom sheet is never dragged.
-
-Matching stays exact equality with `trip.raw_text`. The action buttons (`Yes`, `Edit`,
-`Add travel`) carry the neighbouring row's text inside a description that *starts* with the
-button name, so exact equality never selects one.
-
-`capture_trip_maps` sweeps the list top to bottom. On a pending row it activates, waits for
-the map to stop changing, saves the PNG, presses Back, and checks whether focus survived. If
-it did, the sweep continues from that row; if it did not, a fresh sweep starts from the top.
-Rows already captured are skipped, so restarts are cheap and cannot loop.
-
-## The unknowns, and how to measure them
-
-Three things were guessed at before and must be read off the device instead:
-
-- what the trip screen's tree actually contains (there is no confirmed Back or header node —
-  `_opened` still infers "opened" from the day's other rows leaving the screen);
-- whether the list takes D-pad focus at all, and in what order;
-- where focus and the sheet end up after Back.
+Measured with a focus walk on the device:
 
 ```
-py -m timeline_scraper scrape --probe-focus
+[  0] desc='' text='' class=android.webkit.WebView id= bounds=[0,0][1080,2410]
+[  1] desc='Backup enabled.' text='' class=android.widget.Button bounds=[672,202][798,330]
+focus stopped moving after 1 step
 ```
 
-Navigates to the day, then writes a timestamped `probe-*` directory under the export folder:
+The Timeline day is one full-screen WebView holding both the map and the list. That kills
+two approaches outright:
 
-| file | what it answers |
+- **Focus navigation is dead.** The walk leaves the WebView on its first step and stops on
+  a chrome button. No row can be selected before it is activated.
+- **Containment checks against the container are dead.** The container is the screen, so
+  "is this rectangle inside the list" has no meaning. Rows are virtual accessibility nodes
+  of the web page, and their rectangles are all the positional information that exists.
+
+## The defect
+
+`capture.py` takes the rectangle a row reports and touches its centre. On the phone the
+touch lands on the map, the map pans, and the screenshot is of the day view.
+
+The rectangle is therefore wrong, stale, or describing something other than the visible
+layout — and which of those it is decides the fix. That is a measurement, not an argument,
+so both defensible strategies are implemented and run side by side.
+
+## The two strategies
+
+Both live in `tap.py` and share a signature: given a row's description, return the point to
+touch, or None if the row cannot be reached honestly.
+
+**`locate_strict` — row first.** Take the row's rectangle and refuse to touch it unless it
+passes three checks:
+
+1. identical in two consecutive dumps, so the list is not still moving;
+2. a plausible row height, fully inside the screen;
+3. not sharing a band of the screen with another row — rows in a list never overlap, so an
+   overlap proves the tree is not describing the visible layout.
+
+Touched with `input tap`, at 30% of the row's width so the trailing action buttons are
+clear of the finger.
+
+**`locate_anchor` — point first.** Fix one point at 62% of screen height, well below the
+map. Scroll until the tree says *that point* is covered by the wanted row, then touch the
+point. A rectangle that lies about its position cannot drag the finger onto the map,
+because the finger never moves.
+
+Touched with a held gesture (`input swipe x y x y 120`) rather than `input tap`, because
+web content sometimes ignores an instantaneous touch it never sees settle.
+
+The two differ in both targeting and gesture on purpose: between them they cover stale
+rectangles, off-viewport rectangles, and a page that ignores instant taps.
+
+## Running the experiment
+
+```
+py -m timeline_scraper scrape --tap-lab
+```
+
+Each variant gets the same first two driving trips of the day. The day is reopened between
+variants so neither inherits the other's scroll position or a map the previous run panned.
+
+Output, per variant and run:
+
+```
+exports/draft-screenshots/<variant>/<YYYY-Mon-DD-HHMM>/
+    01-<time>-1-before.xml / .png      the tree and the screen before the touch
+    01-<time>-2-target.txt             the point chosen, and what the tree says is under it
+    01-<time>-3-after-tap.xml / .png   the screen straight after the touch
+    <hhmm>-<hhmm>_driving.png          the settled map, only if the trip opened
+    result.txt                         one line per trip
+```
+
+`result.txt` distinguishes the four outcomes that matter:
+
+| line | meaning |
 | --- | --- |
-| `01-day.xml` / `.png` / `-nodes.txt` | the day list as the tree sees it |
-| `focus-walk.txt` | every stop of the focus walk, in order, or a note that focus is unavailable |
-| `02-row-focused.xml` / `.png` | the first `Driving` row with the highlight on it |
-| `03-after-activate.xml` / `.png` / `-nodes.txt` | what activation actually opened |
-| `04-after-back.xml` / `.png` | where Back leaves the screen, and where focus lands |
+| `OPENED` | the strategy works — the map is in the folder |
+| `NOT LOCATED` | the rectangle never passed the checks; nothing was touched |
+| `NO REACTION` | the touch landed and the screen did not change by a single byte |
+| `WRONG TARGET` | the screen changed but the trip did not open — the map moved |
 
-If `focus-walk.txt` says focus could not be established, variant A is dead on this build of
-Maps and the fallback is a containment-checked tap: find the `scrollable` container in the
-same dump and tap only rows whose rectangle lies fully inside it.
+`NO REACTION` and `WRONG TARGET` both name what the tree says was under the touch point,
+which is the line that identifies whether the coordinate or the gesture is at fault.
 
 ## Untouched, still working
 
 - `extract.collect_day` — scrolls the day and returns every description in order.
 - `parse.build_day` — descriptions to `Visit` / `Trip`, endpoints linked by exact clock match.
-- `model.write_day_json` — `~/timeline-exports/timeline_<YYYYMMDD>.draft.json`.
-
-The JSON is written before the screenshot pass and rewritten after, so a broken capture never
-costs the day's data.
+- `model.write_day_json` — the day's JSON, written before the screenshot pass and again
+  after, so a broken capture never costs the day's data.
 
 ## Confirmed behaviour to design around
 
-- The map zooms to fit the trip. A long trip barely changes the view; a short trip zooms in and
-  loads new tiles, so it needs more settling time, not less. `_wait_for_map` polls screenshots
-  until two in a row are identical rather than sleeping a fixed amount.
+- The map zooms to fit the trip. A long trip barely changes the view; a short trip zooms in
+  and loads new tiles, so it needs more settling time. `wait_for_map` polls screenshots
+  until two in a row are identical instead of sleeping a fixed amount.
 - Rows must be located again on every pass. Remembered positions are always wrong.
 - `trip.raw_text` equals the row's `content-desc` exactly.
+- Swipes start at 72% of screen height, not 80%: near the bottom sheet's edge the gesture
+  drags the sheet instead of scrolling the list, which enlarges the map and moves every row.
 
 ## Files
 
-- `src/timeline_scraper/focus.py` — D-pad primitives: `focused_node`, `step`, `walk`,
-  `to_start`, `focus_row`, `activate`, `back`.
-- `src/timeline_scraper/capture.py` — the sweep: `capture_trip_maps`, `_open_focused`, `_opened`.
-- `src/timeline_scraper/probe.py` — `probe_focus`, the measurement run.
-- `src/timeline_scraper/cli.py` — `--probe-focus`, `--no-screenshots`.
+- `src/timeline_scraper/tap.py` — `locate_strict`, `locate_anchor`, `tap_instant`,
+  `tap_gesture`, `describe_node_at`.
+- `src/timeline_scraper/taplab.py` — `run_tap_lab`, the side-by-side run.
+- `src/timeline_scraper/capture.py` — the normal pass; takes the strategy as a parameter.
+- `src/timeline_scraper/cli.py` — `--tap-lab`, `--no-screenshots`.

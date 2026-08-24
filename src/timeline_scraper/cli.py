@@ -12,13 +12,13 @@ from .extract import collect_day
 from .model import write_day_json
 from .nav import go_to_date, launch_maps, reach_timeline
 from .parse import build_day
-from .probe import probe_focus
+from .taplab import run_tap_lab
 
 logger = logging.getLogger(__name__)
 
 # M2 test date (spec: dates are hardcoded through M1-M5); Thursday, Aug 20 2026.
 _M2_TEST_DATE = date(2026, 8, 20)
-_DEFAULT_OUT_DIR = Path.home() / "timeline-exports"
+_DEFAULT_OUT_DIR = Path("exports")
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -72,10 +72,6 @@ def cmd_scrape(args: argparse.Namespace) -> int:
         logger.info("Opening the calendar and selecting %s", target.isoformat())
         go_to_date(target, serial=serial)
 
-        if args.probe_focus:
-            probe_focus(out_dir, serial=serial)
-            return 0
-
         day = build_day(target.isoformat(), collect_day(serial=serial))
         write_day_json(day, json_path)
         logger.info("Wrote %s", json_path)
@@ -90,6 +86,16 @@ def cmd_scrape(args: argparse.Namespace) -> int:
                 trip.from_place or trip.from_address or "?",
                 trip.to_place or trip.to_address or "?",
             )
+
+        if args.tap_lab:
+            def reopen_day() -> None:
+                """Put the phone back on this day's Timeline screen."""
+                launch_maps(serial=serial)
+                reach_timeline(serial=serial)
+                go_to_date(target, serial=serial)
+
+            run_tap_lab(day, out_dir, reopen_day, serial=serial)
+            return 0
 
         if args.screenshots:
             saved = capture_trip_maps(day, out_dir / target.isoformat(), serial=serial)
@@ -154,10 +160,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip the map screenshot pass",
     )
     p_scrape.add_argument(
-        "--probe-focus",
-        dest="probe_focus",
+        "--tap-lab",
+        dest="tap_lab",
         action="store_true",
-        help="Record how the day list responds to D-pad focus, then exit",
+        help="Run every tap strategy over the same two driving trips, then exit",
     )
     p_scrape.add_argument(
         "--tz",

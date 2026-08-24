@@ -23,22 +23,32 @@ JSON only, no opening of trip screens.
 py -m timeline_scraper scrape --no-screenshots
 ```
 
-Measure how the day list responds to D-pad focus, then exit. Writes dumps and screenshots
-to a timestamped `probe-*` folder.
+Run every tap strategy over the same two driving trips and keep what each produced,
+then exit. This is the current M2.2 experiment.
 
 ```
-py -m timeline_scraper scrape --probe-focus
+py -m timeline_scraper scrape --tap-lab
 ```
 
 On Windows use `py`, not `python`. The `python` command is intercepted by a Windows
 App Execution Alias and redirects to the Microsoft Store.
 
-Output goes to `~/timeline-exports/`:
+## Folders
+
+Everything is written under `exports/` in the repo root. It is gitignored, so nothing
+personal reaches a commit.
 
 ```
-timeline_20260820.draft.json
-2026-08-20/1321-1342_driving.png
+exports/
+    timeline_20260820.draft.json
+    2026-08-20/1321-1342_driving.png
+    draft-screenshots/
+        variant-1-strict-bounds/2026-Aug-24-1503/
+        variant-2-anchor-point/2026-Aug-24-1511/
 ```
+
+Folder and file names are English only. `debug_dumps/` is dead — nothing writes to it any
+more; delete it if it is still on the laptop.
 
 ## Who tests what
 
@@ -56,16 +66,52 @@ Say instead what the code is supposed to do and which file or log line settles i
 change rests on an assumption the run will confirm or kill, name the assumption and name
 the output that answers it.
 
+## What the phone actually is — measured, not assumed
+
+The Timeline day is an `android.webkit.WebView` whose node covers the whole screen:
+`[0,0][1080,2410]` on this Pixel. The map and the list are both inside that one web page.
+
+Two things follow, and both were paid for once already:
+
+- **D-pad focus does not work.** A focus walk leaves the WebView on its first step and
+  stops on a chrome button ("Backup enabled."). Nothing in the list can be selected before
+  it is activated. Touch is the only way in.
+- **The full-screen WebView is useless as a bounding box.** Rows are virtual accessibility
+  nodes of the web page. Their rectangles are the only positional information available,
+  and they cannot be checked against a container, because the container is the screen.
+
+Do not re-propose focus navigation, and do not assume a row rectangle is where the row is.
+
+## Never propose the Timeline export
+
+Google Takeout, "Export Timeline data", the emailed archive — all of it is settled and the
+answer is no. The export arrives by email and cannot be matched back to what the map shows,
+which is the entire point of this tool. It has been raised in several sessions and refused
+in every one. Do not raise it again.
+
 ## Current milestone status
 
 - [x] M1 — ADB preflight, wake screen, launch Maps, navigate to Timeline
 - [x] M2.1 — Open a chosen day through the Timeline calendar
-- [x] M2.2 — One day -> JSON: trip endpoints + map screenshot per driving trip
+- [~] M2.2 — One day -> JSON works. The map screenshot per driving trip does not:
+      the touch misses the row. `scrape --tap-lab` is measuring which strategy lands.
 - [ ] M2 — Output path prompt, timestamped filename, overwrite/rename/cancel
 - [ ] M3 — Scrape 7 days with crash-safe incremental save
 - [ ] M4 — Flatten to CSV
 - [ ] M5 — Full month export
 - [ ] M6 — Polish: interactive prompts, logging, tests
+
+## How branches are named
+
+`task-<NN>-<YYYY>-<Mon>-<DD>`, for example `task-07-2026-Aug-24`.
+
+- `NN` is the task number, zero-padded, one higher than the largest `task-*` branch already
+  on the remote. Check with `git branch -r` before naming a new one.
+- The date is the day the branch was created, month as a three-letter English abbreviation.
+
+No mood words, no generated nonsense, no milestone names. If a task harness hands over a
+branch name that does not follow this, say so in the reply and use the one it gave — never
+push to a name the user has not been told about.
 
 ## Working branch
 
@@ -161,6 +207,7 @@ Rules that must not be relaxed:
   (Windows has no built-in timezone database)
 - Test fixtures must be anonymized
 - No autonomous agents — two deterministic commands only: `scrape` and `flatten`
+- Never suggest the Google Timeline / Takeout export as a data source
 
 ## Project structure
 
@@ -172,9 +219,9 @@ src/timeline_scraper/
     model.py    — Visit / Trip / Day dataclasses + JSON serialization
     extract.py  — UI dump -> ordered descriptions, scroll + dedupe, bounds helper
     parse.py    — descriptions -> visits and trips, endpoint linking
-    focus.py    — D-pad focus navigation: no coordinates, no taps on the map
+    tap.py      — where to touch a row: two strategies, two gestures
     capture.py  — second pass: open each driving trip, wait for the map, screenshot
-    probe.py    — measurement run behind `scrape --probe-focus`, writes dumps to disk
+    taplab.py   — `scrape --tap-lab`: runs every strategy and keeps what each produced
     flatten.py  — (M4) JSON -> CSV
 ```
 
