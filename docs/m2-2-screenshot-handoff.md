@@ -7,7 +7,6 @@ Working, do not touch:
 - `extract.collect_day` — scrolls the day and returns every accessibility description in order.
 - `parse.build_day` — descriptions to `Visit` / `Trip`, endpoints linked by exact clock match.
 - `model.write_day_json` — `~/timeline-exports/timeline_<YYYYMMDD>.draft.json`.
-- `tests/test_parse.py` — 7 tests, no phone needed.
 
 Broken:
 

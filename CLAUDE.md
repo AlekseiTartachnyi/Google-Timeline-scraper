@@ -12,7 +12,6 @@ Spec: `timeline-scraper-spec.md`
 ```
 py -m timeline_scraper scrape                  # day -> JSON + one map screenshot per drive
 py -m timeline_scraper scrape --no-screenshots # JSON only, no taps into trip screens
-py -m pytest                                   # parser tests, no phone needed
 ```
 
 On Windows use `py`, not `python`. The `python` command is intercepted by a Windows
@@ -120,8 +119,6 @@ src/timeline_scraper/
     parse.py    — descriptions -> visits and trips, endpoint linking
     capture.py  — second pass: open each driving trip, wait for the map, screenshot
     flatten.py  — (M4) JSON -> CSV
-tests/
-    test_parse.py — anonymized rows, runs without a phone
 ```
 
 ## Before making any changes
