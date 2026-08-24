@@ -174,6 +174,12 @@ Dates are **hardcoded during M1–M5 for testing**; interactive prompts are wire
 - Implement output location prompt, timestamped filename, and conflict handling
   (overwrite / rename / cancel).
 - Introduce OCR fallback here if M2 shows the tree misses fields.
+- **M2.2 — trip endpoints.** A trip row carries no address of its own; the endpoints live in
+  the neighbouring visit rows and are recovered by matching timestamps exactly. Record where
+  each endpoint came from instead of guessing when the chain breaks.
+- **M2.2 — map screenshots.** Second pass over the day: open each motion segment, wait for the
+  map to settle, save the screenshot next to the JSON. This is the manual-review channel for
+  trips the accessibility tree cannot explain.
 - **Done when:** one full day is captured losslessly to a JSON file in the chosen location.
 
 ### M3 — Previous 7 days (+ crash-safe incremental save)
@@ -202,3 +208,13 @@ Dates are **hardcoded during M1–M5 for testing**; interactive prompts are wire
    "Is this where you were?") — to be provided.
 2. Tesseract OCR: treated as an optional fallback dependency; confirm it is acceptable.
 3. CSV `category`: free text by default (suggested values `business` / `personal`).
+4. **Route distance cross-check (deferred, post-M4).** Timeline reports the length of the
+   *recorded GPS track*, which inflates where the signal is poor — a 1.5 mi downtown drive can
+   be reported as 4.0 mi. Once trip endpoints are derived (M2.2), the routed distance between
+   them can be looked up through a directions API. Keep **both** numbers, never replace one
+   with the other: `distance_mi_recorded` (what the UI showed) and `distance_mi_route` (what
+   the road network says). Detours are legitimate — accidents, closures, road works — so a
+   track longer than the route is not automatically an error. A large gap between the two is a
+   review signal, not a correction. Open questions: which provider, cost and quota per lookup,
+   whether results are cached per endpoint pair, and whether the API is worth the dependency at
+   all versus reviewing flagged trips by hand.
