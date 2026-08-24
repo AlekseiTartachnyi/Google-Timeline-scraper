@@ -7,12 +7,11 @@ from datetime import date
 from pathlib import Path
 
 from .adb import ADBError, devices, is_locked, wake_screen
-from .capture import capture_trip_maps
 from .extract import collect_day
-from .model import write_day_json
+from .model import write_trips_json
 from .nav import go_to_date, launch_maps, reach_timeline
 from .parse import build_day
-from .taplab import run_tap_lab
+from .report import render_day
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,7 @@ def _setup_logging(verbose: bool) -> None:
 # ---------------------------------------------------------------------------
 
 def cmd_scrape(args: argparse.Namespace) -> int:
-    """Capture one Timeline day to JSON, with a map screenshot per driving trip."""
+    """Capture one Timeline day: driving and missing travel, to JSON and a report."""
     _setup_logging(args.verbose)
 
     logger.info("ADB preflight check")
@@ -60,7 +59,9 @@ def cmd_scrape(args: argparse.Namespace) -> int:
 
     target = _M2_TEST_DATE
     out_dir = Path(args.out).expanduser() if args.out else _DEFAULT_OUT_DIR
-    json_path = out_dir / f"timeline_{target.strftime('%Y%m%d')}.draft.json"
+    stem = f"timeline_{target.strftime('%Y%m%d')}"
+    json_path = out_dir / f"{stem}.json"
+    report_path = out_dir / f"{stem}.txt"
 
     try:
         wake_screen(serial=serial)
@@ -73,34 +74,6 @@ def cmd_scrape(args: argparse.Namespace) -> int:
         go_to_date(target, serial=serial)
 
         day = build_day(target.isoformat(), collect_day(serial=serial))
-        write_day_json(day, json_path)
-        logger.info("Wrote %s", json_path)
-
-        for trip in day.trips:
-            logger.info(
-                "  %s–%s  %-14s %5s mi  %s -> %s",
-                trip.start_time,
-                trip.end_time,
-                trip.mode,
-                trip.distance_mi if trip.distance_mi is not None else "?",
-                trip.from_place or trip.from_address or "?",
-                trip.to_place or trip.to_address or "?",
-            )
-
-        if args.tap_lab:
-            def reopen_day() -> None:
-                """Put the phone back on this day's Timeline screen."""
-                launch_maps(serial=serial)
-                reach_timeline(serial=serial)
-                go_to_date(target, serial=serial)
-
-            run_tap_lab(day, out_dir, reopen_day, serial=serial)
-            return 0
-
-        if args.screenshots:
-            saved = capture_trip_maps(day, out_dir / target.isoformat(), serial=serial)
-            write_day_json(day, json_path)
-            logger.info("Saved %d map screenshot(s)", saved)
     except ADBError as exc:
         logger.error("ADB error: %s", exc)
         return 1
@@ -108,7 +81,15 @@ def cmd_scrape(args: argparse.Namespace) -> int:
         logger.error("%s", exc)
         return 1
 
-    logger.info("Done — %s", json_path)
+    written = write_trips_json(day, json_path)
+    report = render_day(day)
+    report_path.write_text(report, encoding="utf-8")
+
+    logger.info("Wrote %s (%d trip(s))", json_path, written)
+    logger.info("Wrote %s", report_path)
+    print()
+    print(report)
+
     return 0
 
 
@@ -152,18 +133,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--out",
         metavar="PATH",
         help="Output directory (default: ~/timeline-exports/)",
-    )
-    p_scrape.add_argument(
-        "--no-screenshots",
-        dest="screenshots",
-        action="store_false",
-        help="Skip the map screenshot pass",
-    )
-    p_scrape.add_argument(
-        "--tap-lab",
-        dest="tap_lab",
-        action="store_true",
-        help="Run every tap strategy over the same two driving trips, then exit",
     )
     p_scrape.add_argument(
         "--tz",

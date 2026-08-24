@@ -1,113 +1,80 @@
-# M2.2 — the trip screenshot pass
+# M2.2 — what the scraper produces
 
-## What the day screen is
+## Scope
 
-Measured with a focus walk on the device:
+One Timeline day in, two files out. Movement rows are kept only when they are `Driving` or
+`Missing travel`; walking and the transit modes are parsed but never written, because they
+are not driven and never reach a mileage record.
 
-```
-[  0] desc='' text='' class=android.webkit.WebView id= bounds=[0,0][1080,2410]
-[  1] desc='Backup enabled.' text='' class=android.widget.Button bounds=[672,202][798,330]
-focus stopped moving after 1 step
-```
+The per-trip map screenshot is **not** part of this milestone. See the last section.
 
-The Timeline day is one full-screen WebView holding both the map and the list. That kills
-two approaches outright:
-
-- **Focus navigation is dead.** The walk leaves the WebView on its first step and stops on
-  a chrome button. No row can be selected before it is activated.
-- **Containment checks against the container are dead.** The container is the screen, so
-  "is this rectangle inside the list" has no meaning. Rows are virtual accessibility nodes
-  of the web page, and their rectangles are all the positional information that exists.
-
-## The defect
-
-`capture.py` takes the rectangle a row reports and touches its centre. On the phone the
-touch lands on the map, the map pans, and the screenshot is of the day view.
-
-The rectangle is therefore wrong, stale, or describing something other than the visible
-layout — and which of those it is decides the fix. That is a measurement, not an argument,
-so both defensible strategies are implemented and run side by side.
-
-## The two strategies
-
-Both live in `tap.py` and share a signature: given a row's description, return the point to
-touch, or None if the row cannot be reached honestly.
-
-**`locate_strict` — row first.** Take the row's rectangle and refuse to touch it unless it
-passes three checks:
-
-1. identical in two consecutive dumps, so the list is not still moving;
-2. a plausible row height, fully inside the screen;
-3. not sharing a band of the screen with another row — rows in a list never overlap, so an
-   overlap proves the tree is not describing the visible layout.
-
-Touched with `input tap`, at 30% of the row's width so the trailing action buttons are
-clear of the finger.
-
-**`locate_anchor` — point first.** Fix one point at 62% of screen height, well below the
-map. Scroll until the tree says *that point* is covered by the wanted row, then touch the
-point. A rectangle that lies about its position cannot drag the finger onto the map,
-because the finger never moves.
-
-Touched with a held gesture (`input swipe x y x y 120`) rather than `input tap`, because
-web content sometimes ignores an instantaneous touch it never sees settle.
-
-The two differ in both targeting and gesture on purpose: between them they cover stale
-rectangles, off-viewport rectangles, and a page that ignores instant taps.
-
-## Running the experiment
+## Output
 
 ```
-py -m timeline_scraper scrape --tap-lab
+exports/timeline_20260820.json
+exports/timeline_20260820.txt
 ```
 
-Each variant gets the same first two driving trips of the day. The day is reopened between
-variants so neither inherits the other's scroll position or a map the previous run panned.
-
-Output, per variant and run:
+The report is printed to the console as well, so a run ends with the day on screen.
 
 ```
-exports/draft-screenshots/<variant>/<YYYY-Mon-DD-HHMM>/
-    01-<time>-1-before.xml / .png      the tree and the screen before the touch
-    01-<time>-2-target.txt             the point chosen, and what the tree says is under it
-    01-<time>-3-after-tap.xml / .png   the screen straight after the touch
-    <hhmm>-<hhmm>_driving.png          the settled map, only if the trip opened
-    result.txt                         one line per trip
+Date - 2026, Aug, 20, Thu
+
+1. Driving
+   1. Left 9:13 AM - Home, 123 Main St, Springfield
+   2. Arrived 9:41 AM - Missing visit
+   3. 12.4 mi
+
+2. Missing travel
+   1. Left 11:00 AM - Costco, 500 Oak Ave
+   2. Arrived 11:20 AM - Gas Station, 77 Elm St
+   3. no distance reported
+
+4 trip(s), 39.7 mi total (1 without a reported distance)
 ```
 
-`result.txt` distinguishes the four outcomes that matter:
+## The three ways an endpoint can be empty, and why they read differently
 
-| line | meaning |
+A tax record cannot carry a guess, so the report never blurs "unknown" into one word:
+
+| printed | meaning |
 | --- | --- |
-| `OPENED` | the strategy works — the map is in the folder |
-| `NOT LOCATED` | the rectangle never passed the checks; nothing was touched |
-| `NO REACTION` | the touch landed and the screen did not change by a single byte |
-| `WRONG TARGET` | the screen changed but the trip did not open — the map moved |
+| `Home, 123 Main St` | a visit lined up exactly with this end of the trip |
+| `Missing visit` | a visit lined up, and Google knows a stop happened there but not where |
+| `no matching visit` | nothing lined up — no clock string matched this end of the trip |
 
-`NO REACTION` and `WRONG TARGET` both name what the tree says was under the touch point,
-which is the line that identifies whether the coordinate or the gesture is at fault.
+In the JSON these are `from_place`/`from_address` filled, `from_missing: true`, and
+everything null respectively — same for the `to_` side.
 
-## Untouched, still working
+## How endpoints are recovered
 
-- `extract.collect_day` — scrolls the day and returns every description in order.
-- `parse.build_day` — descriptions to `Visit` / `Trip`, endpoints linked by exact clock match.
-- `model.write_day_json` — the day's JSON, written before the screenshot pass and again
-  after, so a broken capture never costs the day's data.
+A trip row never carries an address. The addresses live in the visit rows above and below
+it, and the clocks line up exactly: a visit ending at 1:21 PM is followed by a trip
+starting at 1:21 PM. Linking happens over the **full** segment list, before the walking
+rows are filtered out, so a visit sitting between a walk and a drive still supplies its
+address to the drive.
 
-## Confirmed behaviour to design around
+Matching is exact string equality on the clock. No tolerance window, no nearest neighbour.
+No match leaves the endpoint empty.
 
-- The map zooms to fit the trip. A long trip barely changes the view; a short trip zooms in
-  and loads new tiles, so it needs more settling time. `wait_for_map` polls screenshots
-  until two in a row are identical instead of sleeping a fixed amount.
-- Rows must be located again on every pass. Remembered positions are always wrong.
-- `trip.raw_text` equals the row's `content-desc` exactly.
-- Swipes start at 72% of screen height, not 80%: near the bottom sheet's edge the gesture
-  drags the sheet instead of scrolling the list, which enlarges the map and moves every row.
+## What each file does
 
-## Files
+- `extract.collect_day` — scrolls the day, merges the dumps, returns every accessibility
+  description in screen order.
+- `parse.build_day` — descriptions to `Visit` / `Trip`, action rows (`Yes`, `Edit`,
+  `Add travel`) dropped, endpoints linked, missing visits flagged.
+- `model.write_trips_json` — filters to the reported modes and writes the JSON.
+- `report.render_day` — the numbered list above.
 
-- `src/timeline_scraper/tap.py` — `locate_strict`, `locate_anchor`, `tap_instant`,
-  `tap_gesture`, `describe_node_at`.
-- `src/timeline_scraper/taplab.py` — `run_tap_lab`, the side-by-side run.
-- `src/timeline_scraper/capture.py` — the normal pass; takes the strategy as a parameter.
-- `src/timeline_scraper/cli.py` — `--tap-lab`, `--no-screenshots`.
+## The map screenshot, and why it is parked
+
+Opening each driving trip to screenshot its map was the original M2.2 and does not work.
+The Timeline day is one `android.webkit.WebView` covering the whole screen; a focus walk
+leaves it on the first step, so nothing can be selected before it is activated, and the
+touch computed from a row's reported rectangle lands on the map, which then pans away.
+
+Two tap strategies were written and are preserved in commit `88e7956` — a row-first one
+that refuses rectangles failing a stability and overlap check, and a point-first one that
+scrolls until the tree agrees a fixed point is covered by the wanted row. Neither was run
+to a conclusion. Until someone picks that up, the map is checked by hand against the
+report, which is what the report's per-trip layout is for.

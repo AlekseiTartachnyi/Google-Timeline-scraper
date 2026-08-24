@@ -157,6 +157,10 @@ def link_endpoints(segments: list[Visit | Trip]) -> None:
     A neighbour is only accepted when the clock strings match exactly: the
     visit before must end when the trip starts, the visit after must start when
     the trip ends. Anything else leaves the endpoint empty rather than guessed.
+
+    A matching neighbour that is a "Missing visit" is recorded as such. Google
+    knows a stop happened there and not where it was, which is a different fact
+    from having found no neighbour at all, and the report must not blur them.
     """
     for i, segment in enumerate(segments):
         if not isinstance(segment, Trip):
@@ -167,16 +171,22 @@ def link_endpoints(segments: list[Visit | Trip]) -> None:
             None,
         )
         if before is not None and before.end_time == segment.start_time:
-            segment.from_place = before.place
-            segment.from_address = before.address
+            if before.missing:
+                segment.from_missing = True
+            else:
+                segment.from_place = before.place
+                segment.from_address = before.address
 
         after = next(
             (s for s in segments[i + 1:] if isinstance(s, Visit)),
             None,
         )
         if after is not None and after.start_time == segment.end_time:
-            segment.to_place = after.place
-            segment.to_address = after.address
+            if after.missing:
+                segment.to_missing = True
+            else:
+                segment.to_place = after.place
+                segment.to_address = after.address
 
 
 def build_day(date: str, descriptions: list[str]) -> Day:

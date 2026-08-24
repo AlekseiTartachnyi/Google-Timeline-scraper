@@ -11,23 +11,11 @@ Spec: `timeline-scraper-spec.md`
 
 One command per block — copy them one at a time.
 
-Full run: a day to JSON, plus one map screenshot per driving trip.
+Scrape the day: driving and missing travel to JSON, plus the numbered report, which is
+also printed to the console.
 
 ```
 py -m timeline_scraper scrape
-```
-
-JSON only, no opening of trip screens.
-
-```
-py -m timeline_scraper scrape --no-screenshots
-```
-
-Run every tap strategy over the same two driving trips and keep what each produced,
-then exit. This is the current M2.2 experiment.
-
-```
-py -m timeline_scraper scrape --tap-lab
 ```
 
 On Windows use `py`, not `python`. The `python` command is intercepted by a Windows
@@ -40,15 +28,12 @@ personal reaches a commit.
 
 ```
 exports/
-    timeline_20260820.draft.json
-    2026-08-20/1321-1342_driving.png
-    draft-screenshots/
-        variant-1-strict-bounds/2026-Aug-24-1503/
-        variant-2-anchor-point/2026-Aug-24-1511/
+    timeline_20260820.json    driving and missing travel, endpoints resolved
+    timeline_20260820.txt     the same day as the numbered report
 ```
 
-Folder and file names are English only. `debug_dumps/` is dead — nothing writes to it any
-more; delete it if it is still on the laptop.
+Folder and file names are English only. `debug_dumps/` and `draft-screenshots/` are dead —
+nothing writes to them any more; delete them if they are still on the laptop.
 
 ## Who tests what
 
@@ -89,6 +74,13 @@ Not measured, therefore not to be asserted:
 The one dump that answers both is the day screen's full tree next to the screenshot taken
 at the same moment. Ask for it rather than reasoning around it.
 
+## The per-trip map screenshot is parked
+
+Opening each driving trip to screenshot its map was tried and abandoned: the touch lands on
+the map instead of the row, and the WebView gives nothing reliable to aim at. The code for
+both tap strategies is in commit `88e7956` if it is ever picked up again. Until then the
+map is checked by hand, and the scraper's job stops at the JSON and the report.
+
 ## Never propose the Timeline export
 
 Google Takeout, "Export Timeline data", the emailed archive — all of it is settled and the
@@ -100,8 +92,8 @@ in every one. Do not raise it again.
 
 - [x] M1 — ADB preflight, wake screen, launch Maps, navigate to Timeline
 - [x] M2.1 — Open a chosen day through the Timeline calendar
-- [~] M2.2 — One day -> JSON works. The map screenshot per driving trip does not:
-      the touch misses the row. `scrape --tap-lab` is measuring which strategy lands.
+- [x] M2.2 — One day -> JSON and a numbered report: driving and missing travel only,
+      endpoints resolved, missing visits named as such
 - [ ] M2 — Output path prompt, timestamped filename, overwrite/rename/cancel
 - [ ] M3 — Scrape 7 days with crash-safe incremental save
 - [ ] M4 — Flatten to CSV
@@ -204,8 +196,13 @@ Per day, in screen order. A row that is not one of these is chrome and is droppe
 | `distance_mi` | `4.0 mi`, `500 ft`, `3 km` | Google's GPS track length, not the route |
 | `from_place` / `from_address` | the visit **before** | only if `visit.end_time == trip.start_time` |
 | `to_place` / `to_address` | the visit **after** | only if `visit.start_time == trip.end_time` |
-| `screenshot` | second pass | driving trips only |
-| `raw_text` | whole description | also the focus target for the screenshot pass |
+| `from_missing` / `to_missing` | the neighbour is a `Missing visit` | Google knows a stop was there, not where |
+| `raw_text` | whole description | never dropped |
+
+Only `Driving` and `Missing travel` reach the output. Walking and the transit modes are
+parsed — they are needed to keep the row order intact — and then dropped, because they are
+not driven and never reach a mileage record. Endpoints are linked over the full segment
+list first, so a visit sitting between a walk and a drive still supplies its address.
 
 Rules that must not be relaxed:
 
@@ -239,9 +236,7 @@ src/timeline_scraper/
     model.py    — Visit / Trip / Day dataclasses + JSON serialization
     extract.py  — UI dump -> ordered descriptions, scroll + dedupe, bounds helper
     parse.py    — descriptions -> visits and trips, endpoint linking
-    tap.py      — where to touch a row: two strategies, two gestures
-    capture.py  — second pass: open each driving trip, wait for the map, screenshot
-    taplab.py   — `scrape --tap-lab`: runs every strategy and keeps what each produced
+    report.py   — a day rendered as the numbered list checked by eye
     flatten.py  — (M4) JSON -> CSV
 ```
 
