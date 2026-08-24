@@ -9,9 +9,25 @@ Spec: `timeline-scraper-spec.md`
 
 ## How to run
 
+One command per block — copy them one at a time.
+
+Full run: a day to JSON, plus one map screenshot per driving trip.
+
 ```
-py -m timeline_scraper scrape                  # day -> JSON + one map screenshot per drive
-py -m timeline_scraper scrape --no-screenshots # JSON only, no taps into trip screens
+py -m timeline_scraper scrape
+```
+
+JSON only, no opening of trip screens.
+
+```
+py -m timeline_scraper scrape --no-screenshots
+```
+
+Measure how the day list responds to D-pad focus, then exit. Writes dumps and screenshots
+to a timestamped `probe-*` folder.
+
+```
+py -m timeline_scraper scrape --probe-focus
 ```
 
 On Windows use `py`, not `python`. The `python` command is intercepted by a Windows
@@ -23,6 +39,22 @@ Output goes to `~/timeline-exports/`:
 timeline_20260820.draft.json
 2026-08-20/1321-1342_driving.png
 ```
+
+## Who tests what
+
+The phone sits on the user's desk. The AI session has no device, and that is the normal
+arrangement, not a defect:
+
+- The AI writes the code and pushes it to the working branch.
+- The user pulls the branch, runs it against the real Pixel, and reports what happened.
+
+Never write "I have no phone", "the code was never executed", "untested", or any other
+disclaimer of this shape. The user knows — running it is their half of the job, and saying
+it back to them wastes the reply.
+
+Say instead what the code is supposed to do and which file or log line settles it. If a
+change rests on an assumption the run will confirm or kill, name the assumption and name
+the output that answers it.
 
 ## Current milestone status
 
@@ -37,26 +69,49 @@ timeline_20260820.draft.json
 
 ## Working branch
 
-`claude/m2-2-missing-geotags-dmajw0`
+`claude/capture-tap-issue-xteo2h`
 
-Pull the finished work before testing — the branch name changes per task, so always
-check the branch named in the reply, not a remembered one:
+The branch name changes with every task. Use the branch named at the end of the reply,
+never a remembered one.
 
-```
-git fetch origin
-git checkout claude/m2-2-missing-geotags-dmajw0
-git pull origin claude/m2-2-missing-geotags-dmajw0
-```
-
-If local files seem wrong (errors from code you didn't write), throw them away:
+Pull the finished work before testing — one command per line:
 
 ```
 git fetch origin
-git reset --hard origin/claude/m2-2-missing-geotags-dmajw0
 ```
 
-When a task is finished, the reply must end with the exact pull command for the branch
-it was pushed to. Do not assume the previous branch is still current.
+```
+git checkout claude/capture-tap-issue-xteo2h
+```
+
+```
+git pull origin claude/capture-tap-issue-xteo2h
+```
+
+If local files look wrong (errors from code you did not write), throw them away:
+
+```
+git fetch origin
+```
+
+```
+git reset --hard origin/claude/capture-tap-issue-xteo2h
+```
+
+## Every reply that pushed something ends with the pull commands
+
+Mandatory, not "when it seems useful". The user cannot test what they cannot pull, and the
+branch name is different every task.
+
+The last thing in the reply is:
+
+1. The branch name that was actually pushed to.
+2. `git fetch origin`, `git checkout <branch>`, `git pull origin <branch>` — **each command
+   in its own code block, one command per line**, so each can be copied with one click.
+   Never bundle several commands into one block.
+3. The run command for whatever is meant to be tested, also in its own block.
+
+Do not assume the previous branch is still current. Read it off the push, do not remember it.
 
 ## What to extract
 
@@ -84,7 +139,7 @@ Per day, in screen order. A row that is not one of these is chrome and is droppe
 | `from_place` / `from_address` | the visit **before** | only if `visit.end_time == trip.start_time` |
 | `to_place` / `to_address` | the visit **after** | only if `visit.start_time == trip.end_time` |
 | `screenshot` | second pass | driving trips only |
-| `raw_text` | whole description | also the tap target for the screenshot pass |
+| `raw_text` | whole description | also the focus target for the screenshot pass |
 
 Rules that must not be relaxed:
 
