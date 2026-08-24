@@ -1,10 +1,16 @@
 """Flatten a uiautomator UI dump into ordered, inspectable element records."""
 
 import logging
+import time
 from dataclasses import dataclass
 from xml.etree import ElementTree as ET
 
+from . import adb
+
 logger = logging.getLogger(__name__)
+
+# Time for the list to stop moving after a swipe.
+_SCROLL_SETTLE_S = 0.6
 
 
 @dataclass
@@ -62,3 +68,67 @@ def log_nodes(nodes: list[UiNode]) -> None:
             n.clickable,
             n.bounds,
         )
+
+
+def descriptions(nodes: list[UiNode]) -> list[str]:
+    """Return the accessibility descriptions of nodes that carry one, in order."""
+    return [n.content_desc for n in nodes if n.content_desc]
+
+
+def scroll_to_top(serial: str | None = None, max_swipes: int = 12) -> None:
+    """Swipe the Timeline list back to the top of the day."""
+    width, height = adb.screen_size(serial=serial)
+    x = width // 2
+    seen: list[str] = []
+    for _ in range(max_swipes):
+        current = descriptions(flatten(adb.dump_ui(serial=serial)))
+        if current == seen:
+            return
+        seen = current
+        adb.swipe(x, int(height * 0.35), x, int(height * 0.80), 400, serial=serial)
+        time.sleep(_SCROLL_SETTLE_S)
+
+
+def collect_day(serial: str | None = None, max_swipes: int = 40) -> list[str]:
+    """Scroll the whole day and return every accessibility description, in order.
+
+    Swipes up until a full pass adds nothing new, merging each dump into the
+    running list. Duplicates are dropped, order of first appearance is kept.
+    """
+    width, height = adb.screen_size(serial=serial)
+    x = width // 2
+    collected: list[str] = []
+    seen: set[str] = set()
+
+    for swipe_index in range(max_swipes):
+        added = 0
+        for desc in descriptions(flatten(adb.dump_ui(serial=serial))):
+            if desc not in seen:
+                seen.add(desc)
+                collected.append(desc)
+                added += 1
+        logger.debug("Scroll pass %d: %d new rows (%d total)", swipe_index, added, len(collected))
+        if added == 0:
+            break
+        adb.swipe(x, int(height * 0.80), x, int(height * 0.35), 400, serial=serial)
+        time.sleep(_SCROLL_SETTLE_S)
+
+    logger.info("Collected %d rows from the Timeline list", len(collected))
+    return collected
+
+
+def parse_bounds_center(bounds: str) -> tuple[int, int] | None:
+    """Return the center pixel of a bounds string '[l,t][r,b]', or None.
+
+    Rows merged from an earlier scroll report '[0,0][0,0]'; those are not on
+    screen and must not be tapped.
+    """
+    try:
+        left, top, right, bottom = (
+            int(c) for c in bounds.replace("][", ",").strip("[]").split(",")
+        )
+    except ValueError:
+        return None
+    if right <= left or bottom <= top:
+        return None
+    return (left + right) // 2, (top + bottom) // 2

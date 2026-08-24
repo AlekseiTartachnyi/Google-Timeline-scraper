@@ -1,6 +1,7 @@
 """ADB wrappers — thin subprocess layer for all phone interactions."""
 
 import logging
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -121,3 +122,12 @@ def screencap(serial: str | None = None) -> bytes:
     if result.returncode != 0:
         raise ADBError(f"screencap failed: {result.stderr.decode().strip()}")
     return result.stdout
+
+
+def screen_size(serial: str | None = None) -> tuple[int, int]:
+    """Return the device screen size as (width, height) in pixels."""
+    output = shell("wm size", serial=serial)
+    match = re.search(r"(\d+)x(\d+)", output)
+    if not match:
+        raise ADBError(f"Could not read screen size from: {output.strip()!r}")
+    return int(match.group(1)), int(match.group(2))

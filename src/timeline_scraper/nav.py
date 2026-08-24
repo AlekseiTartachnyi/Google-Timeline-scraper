@@ -6,6 +6,7 @@ from datetime import date
 from xml.etree import ElementTree as ET
 
 from .adb import ADBError, dump_ui, shell, tap
+from .extract import parse_bounds_center
 
 logger = logging.getLogger(__name__)
 
@@ -54,20 +55,12 @@ def _find_timeline_element(root: ET.Element) -> ET.Element | None:
     return None
 
 
-def _parse_bounds_center(bounds: str) -> tuple[int, int]:
-    """Return the center pixel (x, y) of a bounds string '[l,t][r,b]'."""
-    coords = bounds.replace("][", ",").strip("[]").split(",")
-    left, top, right, bottom = (int(c) for c in coords)
-    return (left + right) // 2, (top + bottom) // 2
-
-
 def tap_element(node: ET.Element, serial: str | None = None) -> None:
     """Tap the center of a UI node using its bounds attribute."""
-    bounds = node.get("bounds", "")
-    if not bounds:
-        raise ADBError(f"Node has no bounds: {ET.tostring(node, encoding='unicode')}")
-    x, y = _parse_bounds_center(bounds)
-    tap(x, y, serial=serial)
+    point = parse_bounds_center(node.get("bounds", ""))
+    if point is None:
+        raise ADBError(f"Node is not on screen: {ET.tostring(node, encoding='unicode')}")
+    tap(*point, serial=serial)
 
 
 def _find_profile_button(root: ET.Element) -> ET.Element | None:

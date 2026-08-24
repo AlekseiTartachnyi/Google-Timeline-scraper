@@ -4,15 +4,20 @@ import argparse
 import logging
 import sys
 from datetime import date
+from pathlib import Path
 
-from .adb import ADBError, devices, dump_ui, is_locked, wake_screen
-from .extract import flatten, log_nodes
+from .adb import ADBError, devices, is_locked, wake_screen
+from .capture import capture_trip_maps
+from .extract import collect_day
+from .model import write_day_json
 from .nav import go_to_date, launch_maps, reach_timeline
+from .parse import build_day
 
 logger = logging.getLogger(__name__)
 
 # M2 test date (spec: dates are hardcoded through M1-M5); Thursday, Aug 20 2026.
 _M2_TEST_DATE = date(2026, 8, 20)
+_DEFAULT_OUT_DIR = Path.home() / "timeline-exports"
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -29,10 +34,7 @@ def _setup_logging(verbose: bool) -> None:
 # ---------------------------------------------------------------------------
 
 def cmd_scrape(args: argparse.Namespace) -> int:
-    """Preflight check + reach the Timeline screen (M1).
-
-    Date range capture and JSON output are added in M2–M3.
-    """
+    """Capture one Timeline day to JSON, with a map screenshot per driving trip."""
     _setup_logging(args.verbose)
 
     logger.info("ADB preflight check")
@@ -55,6 +57,10 @@ def cmd_scrape(args: argparse.Namespace) -> int:
     else:
         logger.info("Device: %s", serial)
 
+    target = _M2_TEST_DATE
+    out_dir = Path(args.out).expanduser() if args.out else _DEFAULT_OUT_DIR
+    json_path = out_dir / f"timeline_{target.strftime('%Y%m%d')}.draft.json"
+
     try:
         wake_screen(serial=serial)
         if is_locked(serial=serial):
@@ -62,11 +68,28 @@ def cmd_scrape(args: argparse.Namespace) -> int:
         launch_maps(serial=serial)
         reach_timeline(serial=serial)
 
-        logger.info("M2.1 — opening calendar and selecting %s", _M2_TEST_DATE.isoformat())
-        go_to_date(_M2_TEST_DATE, serial=serial)
+        logger.info("Opening the calendar and selecting %s", target.isoformat())
+        go_to_date(target, serial=serial)
 
-        logger.info("M2.1 — screen after selecting the date:")
-        log_nodes(flatten(dump_ui(serial=serial)))
+        day = build_day(target.isoformat(), collect_day(serial=serial))
+        write_day_json(day, json_path)
+        logger.info("Wrote %s", json_path)
+
+        for trip in day.trips:
+            logger.info(
+                "  %s–%s  %-14s %5s mi  %s -> %s",
+                trip.start_time,
+                trip.end_time,
+                trip.mode,
+                trip.distance_mi if trip.distance_mi is not None else "?",
+                trip.from_place or trip.from_address or "?",
+                trip.to_place or trip.to_address or "?",
+            )
+
+        if args.screenshots:
+            saved = capture_trip_maps(day, out_dir / target.isoformat(), serial=serial)
+            write_day_json(day, json_path)
+            logger.info("Saved %d map screenshot(s)", saved)
     except ADBError as exc:
         logger.error("ADB error: %s", exc)
         return 1
@@ -74,7 +97,7 @@ def cmd_scrape(args: argparse.Namespace) -> int:
         logger.error("%s", exc)
         return 1
 
-    logger.info("M1 complete — Timeline screen reached")
+    logger.info("Done — %s", json_path)
     return 0
 
 
@@ -118,6 +141,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--out",
         metavar="PATH",
         help="Output directory (default: ~/timeline-exports/)",
+    )
+    p_scrape.add_argument(
+        "--no-screenshots",
+        dest="screenshots",
+        action="store_false",
+        help="Skip the map screenshot pass",
     )
     p_scrape.add_argument(
         "--tz",
