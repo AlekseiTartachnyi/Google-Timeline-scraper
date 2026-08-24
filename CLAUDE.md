@@ -71,16 +71,23 @@ the output that answers it.
 The Timeline day is an `android.webkit.WebView` whose node covers the whole screen:
 `[0,0][1080,2410]` on this Pixel. The map and the list are both inside that one web page.
 
-Two things follow, and both were paid for once already:
+Measured, therefore settled:
 
 - **D-pad focus does not work.** A focus walk leaves the WebView on its first step and
   stops on a chrome button ("Backup enabled."). Nothing in the list can be selected before
-  it is activated. Touch is the only way in.
-- **The full-screen WebView is useless as a bounding box.** Rows are virtual accessibility
-  nodes of the web page. Their rectangles are the only positional information available,
-  and they cannot be checked against a container, because the container is the screen.
+  it is activated. Touch is the only way in. Do not re-propose focus navigation.
+- **Rows are virtual accessibility nodes of a web page**, not Android views.
 
-Do not re-propose focus navigation, and do not assume a row rectangle is where the row is.
+Not measured, therefore not to be asserted:
+
+- whether a scrollable node exists *inside* the WebView. The day list scrolls, so something
+  scrolls it; whether that something appears in the tree as its own node with its own
+  rectangle has never been read off a dump.
+- whether a row's reported rectangle is wrong, stale, or correct-but-misused. This decides
+  the whole fix and is still unknown.
+
+The one dump that answers both is the day screen's full tree next to the screenshot taken
+at the same moment. Ask for it rather than reasoning around it.
 
 ## Never propose the Timeline export
 
@@ -144,20 +151,33 @@ git fetch origin
 git reset --hard origin/claude/capture-tap-issue-xteo2h
 ```
 
-## Every reply that pushed something ends with the pull commands
+## When to print the git commands
 
-Mandatory, not "when it seems useful". The user cannot test what they cannot pull, and the
-branch name is different every task.
+**The first push to a branch** — print the branch name and the full set, each command in its
+own code block, one command per line, never bundled:
 
-The last thing in the reply is:
+`git fetch origin`, `git checkout <branch>`, `git pull origin <branch>`.
 
-1. The branch name that was actually pushed to.
-2. `git fetch origin`, `git checkout <branch>`, `git pull origin <branch>` — **each command
-   in its own code block, one command per line**, so each can be copied with one click.
-   Never bundle several commands into one block.
-3. The run command for whatever is meant to be tested, also in its own block.
+**Every push after that, same branch, same session** — the checkout already happened. One
+command is enough:
 
-Do not assume the previous branch is still current. Read it off the push, do not remember it.
+`git pull origin <branch>`
+
+Repeating the full set on every reply is noise. Print it again only when the branch changes.
+
+Always print the run command for whatever is meant to be tested, in its own block.
+
+Do not assume a remembered branch is still current. Read it off the push.
+
+## Ask instead of assuming
+
+Anything about how the phone behaves — what is in the tree, where a container ends, what a
+gesture does, how many taps a row needs — is a measurement. It cannot be derived from the
+source, and guessing at it has already cost this project two rebuilds.
+
+When a device fact is needed and not known: ask for the dump, the screenshot, or the log
+line that settles it, and say exactly which file. Do not state a device fact confidently
+because it seems likely, and do not write code whose correctness depends on one.
 
 ## What to extract
 
