@@ -48,6 +48,10 @@ exports/
     timeline_2026-Aug-14 - 2026-Aug-20.txt     the same range as the numbered report
 ```
 
+A screen that defeats the navigation is saved next to the export as
+`dump_calendar-not-found_2026-Aug-15_11-22-33.xml` (or `dump_day-cell-not-found_...`),
+and the file name is printed in the error. That dump is what settles the next fix.
+
 While a range is being collected the same name carries a `.partial.json` suffix. It is
 rewritten after every scraped day and deleted when the range finishes, so an interrupted
 run keeps what it already read off the screen; re-running the same command resumes from
@@ -86,6 +90,12 @@ Measured, therefore settled:
   stops on a chrome button ("Backup enabled."). Nothing in the list can be selected before
   it is activated. Touch is the only way in. Do not re-propose focus navigation.
 - **Rows are virtual accessibility nodes of a web page**, not Android views.
+- **Once a day is open, the calendar chip is gone.** After a day is selected the screen
+  carries no "Today" label and nothing clickable that reads like a date, so the calendar
+  cannot be reopened from there. Measured on 2026-Aug-25: the first day scraped fine and
+  the six after it all failed with "Calendar control not found". Every day is therefore
+  reached from a freshly launched Maps — force-stop, launch, Timeline, calendar — which is
+  the one path known to work.
 
 Not measured, therefore not to be asserted:
 

@@ -127,6 +127,10 @@ class DayResult:
     status: str = STATUS_OK
     trips: list[Trip] = field(default_factory=list)
     error: str | None = None
+    # Whether the phone showed the date that was asked for. A day the screen
+    # never named is kept, but never quietly: these trips end up in a tax
+    # record, and one filed under the wrong date is worse than a gap.
+    confirmed: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         """Return the day as a JSON-serializable dict, trips numbered from 1."""
@@ -134,6 +138,7 @@ class DayResult:
             "date": self.date,
             "status": self.status,
             "error": self.error,
+            "confirmed": self.confirmed,
             "trips": [
                 {"index": i, **trip.to_dict()} for i, trip in enumerate(self.trips, start=1)
             ],
@@ -147,10 +152,15 @@ class DayResult:
             status=payload.get("status", STATUS_OK),
             trips=[Trip.from_dict(t) for t in payload.get("trips", [])],
             error=payload.get("error"),
+            confirmed=payload.get("confirmed", True),
         )
 
 
-def day_result(day: Day, modes: tuple[str, ...] = REPORTED_MODES) -> DayResult:
+def day_result(
+    day: Day,
+    confirmed: bool = True,
+    modes: tuple[str, ...] = REPORTED_MODES,
+) -> DayResult:
     """Reduce a scraped day to the trips that reach the export.
 
     Endpoints are already resolved against every visit of the day, including
@@ -162,6 +172,7 @@ def day_result(day: Day, modes: tuple[str, ...] = REPORTED_MODES) -> DayResult:
         date=day.date,
         status=STATUS_OK if trips else STATUS_EMPTY,
         trips=trips,
+        confirmed=confirmed,
     )
 
 

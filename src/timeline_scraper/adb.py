@@ -69,11 +69,13 @@ def keyevent(key: str, serial: str | None = None) -> None:
     shell(f"input keyevent {key}", serial=serial)
 
 
-def dump_ui(serial: str | None = None) -> ET.Element:
-    """Dump the UI hierarchy and return the parsed XML root element.
+def dump_ui_xml(serial: str | None = None) -> str:
+    """Dump the UI hierarchy and return the raw XML text.
 
     Writes the dump to /sdcard/window_dump.xml on the device, pulls it to a
-    local temp file, parses it, and deletes the temp file.
+    local temp file, reads it, and deletes the temp file. The text is returned
+    rather than the parsed tree so a screen that defeated the code can be
+    saved exactly as it was read.
     """
     remote = "/sdcard/window_dump.xml"
     shell(f"uiautomator dump {remote}", serial=serial)
@@ -82,9 +84,14 @@ def dump_ui(serial: str | None = None) -> ET.Element:
         local = tmp.name
     try:
         _run(*prefix, "pull", remote, local)
-        return ET.parse(local).getroot()
+        return Path(local).read_text(encoding="utf-8", errors="replace")
     finally:
         Path(local).unlink(missing_ok=True)
+
+
+def dump_ui(serial: str | None = None) -> ET.Element:
+    """Dump the UI hierarchy and return the parsed XML root element."""
+    return ET.fromstring(dump_ui_xml(serial=serial))
 
 
 def wake_screen(serial: str | None = None) -> None:

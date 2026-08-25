@@ -58,7 +58,10 @@ def _trip_lines(index: int, trip: Trip) -> list[str]:
 
 def render_day(day: DayResult) -> str:
     """Return one day of a run as the numbered report."""
-    lines = [f"Date - {_header_date(day.date)}", ""]
+    lines = [f"Date - {_header_date(day.date)}"]
+    if not day.confirmed:
+        lines.append("   ! the phone never showed this date — check these trips by hand")
+    lines.append("")
 
     if day.status == STATUS_FAILED:
         lines.append(f"Day not captured: {day.error or 'reason not recorded'}")
