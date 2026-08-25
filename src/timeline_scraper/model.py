@@ -1,9 +1,12 @@
-"""Data model for a scraped Timeline day and its JSON serialization."""
+"""Data model for a scraped Timeline day, a multi-day run, and their JSON."""
 
 import json
-from dataclasses import dataclass, field
+import logging
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -67,6 +70,16 @@ class Trip:
             "raw_text": self.raw_text,
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "Trip":
+        """Rebuild a trip from a dict written by `to_dict`.
+
+        Keys the dataclass does not know ("type", "index") are dropped, so a
+        partial file written by an older run still loads.
+        """
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in payload.items() if k in known})
+
 
 @dataclass
 class Day:
@@ -95,23 +108,138 @@ class Day:
 REPORTED_MODES = ("Driving", "Missing travel")
 
 
-def write_trips_json(day: Day, path: Path, modes: tuple[str, ...] = REPORTED_MODES) -> int:
-    """Write the day's reportable trips as JSON. Returns how many were written.
+# A day either produced its trips, produced none, or was never captured.
+STATUS_OK = "ok"
+STATUS_EMPTY = "empty"
+STATUS_FAILED = "failed"
+
+
+@dataclass
+class DayResult:
+    """One day of a run: its reportable trips, or why it was not captured.
+
+    A day that failed is kept in the run rather than dropped. A gap in a
+    mileage record must be visible as a gap — silently missing days read as
+    days without driving.
+    """
+
+    date: str
+    status: str = STATUS_OK
+    trips: list[Trip] = field(default_factory=list)
+    error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the day as a JSON-serializable dict, trips numbered from 1."""
+        return {
+            "date": self.date,
+            "status": self.status,
+            "error": self.error,
+            "trips": [
+                {"index": i, **trip.to_dict()} for i, trip in enumerate(self.trips, start=1)
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "DayResult":
+        """Rebuild a day result from a dict written by `to_dict`."""
+        return cls(
+            date=payload["date"],
+            status=payload.get("status", STATUS_OK),
+            trips=[Trip.from_dict(t) for t in payload.get("trips", [])],
+            error=payload.get("error"),
+        )
+
+
+def day_result(day: Day, modes: tuple[str, ...] = REPORTED_MODES) -> DayResult:
+    """Reduce a scraped day to the trips that reach the export.
 
     Endpoints are already resolved against every visit of the day, including
     the ones sitting between a walk and a drive, so filtering here cannot cost
     an address.
     """
     trips = day.trips_of(modes)
-    payload = {
-        "date": day.date,
-        "trips": [
-            {"index": i, **trip.to_dict()} for i, trip in enumerate(trips, start=1)
-        ],
-    }
+    return DayResult(
+        date=day.date,
+        status=STATUS_OK if trips else STATUS_EMPTY,
+        trips=trips,
+    )
+
+
+@dataclass
+class Run:
+    """A range of days scraped in one go, in date order."""
+
+    first_date: str
+    last_date: str
+    days: list[DayResult] = field(default_factory=list)
+
+    @property
+    def collected_dates(self) -> set[str]:
+        """Return the dates that came off the phone; a failed day is not one.
+
+        A day that failed is worth retrying on the next run — the phone may
+        have been mid-animation, or the calendar may have opened on the wrong
+        month — so it does not count as collected.
+        """
+        return {d.date for d in self.days if d.status != STATUS_FAILED}
+
+    def forget(self, dates: set[str]) -> None:
+        """Drop the days about to be scraped again, so they are not recorded twice."""
+        self.days = [d for d in self.days if d.date not in dates]
+
+    @property
+    def trip_count(self) -> int:
+        """Return how many trips the whole run carries."""
+        return sum(len(d.trips) for d in self.days)
+
+    def sort_days(self) -> None:
+        """Put the days back in date order after a resume."""
+        self.days.sort(key=lambda d: d.date)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the run as a JSON-serializable dict."""
+        return {
+            "first_date": self.first_date,
+            "last_date": self.last_date,
+            "days": [d.to_dict() for d in self.days],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "Run":
+        """Rebuild a run from a dict written by `to_dict`."""
+        return cls(
+            first_date=payload["first_date"],
+            last_date=payload["last_date"],
+            days=[DayResult.from_dict(d) for d in payload.get("days", [])],
+        )
+
+
+def write_run_json(run: Run, path: Path) -> int:
+    """Write the whole run as JSON. Returns how many trips were written.
+
+    Called after every scraped day, not once at the end: the phone is driven
+    for minutes per day and an interrupted run must not lose what it already
+    read off the screen.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        json.dumps(run.to_dict(), indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
-    return len(trips)
+    return run.trip_count
+
+
+def read_run_json(path: Path) -> Run | None:
+    """Return the run stored at `path`, or None if there is nothing usable.
+
+    A partial file that cannot be read is not an error worth stopping for —
+    the run simply starts over — but it is worth saying out loud, because the
+    days in it are about to be scraped again.
+    """
+    if not path.exists():
+        return None
+    try:
+        return Run.from_dict(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        logger.warning("Ignoring unreadable partial file %s: %s", path, exc)
+        return None

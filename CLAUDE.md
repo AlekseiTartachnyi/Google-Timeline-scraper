@@ -18,6 +18,9 @@ also printed to the console.
 py -m timeline_scraper scrape
 ```
 
+With no flags this scrapes the seven days ending on the M3 test day, 2026-Aug-20. Another
+range is `--start YYYY-MM-DD --end YYYY-MM-DD`; a single day is the same date in both.
+
 On Windows use `py`, not `python`. The `python` command is intercepted by a Windows
 App Execution Alias and redirects to the Microsoft Store.
 
@@ -41,8 +44,14 @@ time, because it is the settled result and a re-run replaces it:
 
 ```
 exports/
-    timeline_2026-Aug-20 - 2026-Aug-24.json
+    timeline_2026-Aug-14 - 2026-Aug-20.json    every day of the range, in date order
+    timeline_2026-Aug-14 - 2026-Aug-20.txt     the same range as the numbered report
 ```
+
+While a range is being collected the same name carries a `.partial.json` suffix. It is
+rewritten after every scraped day and deleted when the range finishes, so an interrupted
+run keeps what it already read off the screen; re-running the same command resumes from
+there and retries the days that failed.
 
 Both names are built in `naming.py`. Months come from a table there, never from
 `strftime('%b')`, which follows the laptop's regional setting.
@@ -110,7 +119,7 @@ in every one. Do not raise it again.
 - [x] M2.2 — One day -> JSON and a numbered report: driving and missing travel only,
       endpoints resolved, missing visits named as such
 - [ ] M2 — Output path prompt, timestamped filename, overwrite/rename/cancel
-- [ ] M3 — Scrape 7 days with crash-safe incremental save
+- [x] M3 — Scrape 7 days with crash-safe incremental save
 - [ ] M4 — Flatten to CSV
 - [ ] M5 — Full month export
 - [ ] M6 — Polish: interactive prompts, logging, tests
@@ -129,7 +138,7 @@ push to a name the user has not been told about.
 
 ## Working branch
 
-`claude/capture-tap-issue-xteo2h`
+`claude/task-m3-plan-bjjih9`
 
 The branch name changes with every task. Use the branch named at the end of the reply,
 never a remembered one.
@@ -141,11 +150,11 @@ git fetch origin
 ```
 
 ```
-git checkout claude/capture-tap-issue-xteo2h
+git checkout claude/task-m3-plan-bjjih9
 ```
 
 ```
-git pull origin claude/capture-tap-issue-xteo2h
+git pull origin claude/task-m3-plan-bjjih9
 ```
 
 If local files look wrong (errors from code you did not write), throw them away:
@@ -155,7 +164,7 @@ git fetch origin
 ```
 
 ```
-git reset --hard origin/claude/capture-tap-issue-xteo2h
+git reset --hard origin/claude/task-m3-plan-bjjih9
 ```
 
 ## When to print the git commands

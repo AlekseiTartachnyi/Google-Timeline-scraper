@@ -156,30 +156,93 @@ def _accessible_date_label(d: date) -> str:
     return f"{d.strftime('%A, %B')} {d.day}, {d.year}"
 
 
-def go_to_date(target: date, serial: str | None = None) -> None:
+_MONTH_NAMES = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
+
+
+def _looks_like_a_date(value: str) -> bool:
+    """Return True if the label reads like a date the calendar chip would show."""
+    return any(m in value for m in _MONTH_NAMES) and any(c.isdigit() for c in value)
+
+
+def _find_calendar_control(root: ET.Element, current: date | None) -> ET.Element | None:
+    """Return the control that opens the month calendar.
+
+    On the Timeline screen as it first opens, the control reads "Today". What
+    it reads once another day is showing has not been measured, so two
+    fallbacks follow: the label of the day we last opened, then the topmost
+    clickable node that reads like a date at all — the chip lives in the app
+    bar, so the topmost match is the one to aim at. Which one matched is
+    logged, because that log line is what settles the question.
+    """
+    node = find_element_by_text(root, "Today")
+    if node is not None:
+        logger.debug("Calendar control found by its 'Today' label")
+        return node
+
+    if current is not None:
+        node = find_element_by_text(root, _accessible_date_label(current))
+        if node is not None:
+            logger.info("Calendar control found by the open day's label")
+            return node
+
+    candidates: list[tuple[int, ET.Element]] = []
+    for node in root.iter("node"):
+        if node.get("clickable") != "true":
+            continue
+        for value in (node.get("text", ""), node.get("content-desc", "")):
+            if value and _looks_like_a_date(value):
+                point = parse_bounds_center(node.get("bounds", ""))
+                if point is not None:
+                    candidates.append((point[1], node))
+                break
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda pair: pair[0])
+    top, node = candidates[0]
+    logger.info(
+        "Calendar control guessed from a date-like label at y=%d: text=%r desc=%r",
+        top,
+        node.get("text"),
+        node.get("content-desc"),
+    )
+    return node
+
+
+def go_to_date(target: date, serial: str | None = None, current: date | None = None) -> None:
     """From the Timeline screen, open the calendar and select a specific date.
 
-    Taps the "Today" control to open the month calendar, then taps the day
-    cell whose content-desc matches the target date's accessible label.
-    Does not page across months yet — the target date must fall within
-    whatever month the calendar opens to.
+    Taps the control that opens the month calendar, then taps the day cell
+    whose content-desc matches the target date's accessible label. Pass
+    `current` when another day is already open so the control can be found by
+    that day's label. Does not page across months yet — the target date must
+    fall within whatever month the calendar opens to.
 
     Raises:
-        RuntimeError: If the "Today" control or the target day cell isn't found.
+        RuntimeError: If the calendar control or the target day cell isn't found.
     """
     root = dump_ui(serial=serial)
-    today_node = find_element_by_text(root, "Today")
-    if today_node is None:
-        raise RuntimeError("'Today' control not found on the Timeline screen")
-    logger.info("Tapping 'Today' to open the calendar")
-    tap_element(today_node, serial=serial)
+    control = _find_calendar_control(root, current)
+    if control is None:
+        raise RuntimeError(
+            "Calendar control not found on the Timeline screen: no 'Today' label "
+            "and nothing clickable that reads like a date. Run with -v and send "
+            "the dump for this screen."
+        )
+    tap_element(control, serial=serial)
     time.sleep(_TAP_WAIT_S)
 
     label = _accessible_date_label(target)
     root = dump_ui(serial=serial)
     day_node = find_element_by_text(root, label)
     if day_node is None:
-        raise RuntimeError(f"Calendar day cell not found for {label!r}")
+        raise RuntimeError(
+            f"Calendar day cell not found for {label!r}. The calendar does not "
+            "page across months yet, so the date must be in the month it opens to."
+        )
     logger.info("Tapping calendar day: %r", label)
     tap_element(day_node, serial=serial)
     time.sleep(_TAP_WAIT_S)

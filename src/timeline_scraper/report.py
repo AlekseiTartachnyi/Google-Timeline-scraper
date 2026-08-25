@@ -1,15 +1,16 @@
-"""Render a scraped day as the numbered list used to check it by eye.
+"""Render a scraped run as the numbered list used to check it by eye.
 
 The JSON is what the next milestone consumes; this is what a person reads to
 decide whether Google's mileage for a trip is believable. So every line answers
 one question and says plainly when the answer is missing — a trip whose
 endpoint Google could not name must look different from a trip whose endpoint
-simply did not line up.
+simply did not line up, and a day the phone never gave up must look different
+from a day without driving.
 """
 
 from datetime import date as date_type
 
-from .model import REPORTED_MODES, Day, Trip
+from .model import STATUS_FAILED, DayResult, Run, Trip
 from .naming import header_date
 
 # Google recorded a stop there but not where it was.
@@ -18,6 +19,9 @@ _MISSING = "Missing visit"
 _NO_MATCH = "no matching visit"
 _NO_TIME = "no time reported"
 _NO_DISTANCE = "no distance reported"
+
+# Days run together on screen, so they are cut apart by a rule.
+_SEPARATOR = "=" * 60
 
 
 def _header_date(iso_date: str) -> str:
@@ -52,22 +56,33 @@ def _trip_lines(index: int, trip: Trip) -> list[str]:
     ]
 
 
-def render_day(day: Day, modes: tuple[str, ...] = REPORTED_MODES) -> str:
-    """Return the whole day as the numbered report."""
-    trips = day.trips_of(modes)
+def render_day(day: DayResult) -> str:
+    """Return one day of a run as the numbered report."""
     lines = [f"Date - {_header_date(day.date)}", ""]
-    if not trips:
+
+    if day.status == STATUS_FAILED:
+        lines.append(f"Day not captured: {day.error or 'reason not recorded'}")
+        return "\n".join(lines) + "\n"
+
+    if not day.trips:
         lines.append("No driving or missing travel recorded for this day.")
         return "\n".join(lines) + "\n"
 
-    for index, trip in enumerate(trips, start=1):
+    for index, trip in enumerate(day.trips, start=1):
         lines.extend(_trip_lines(index, trip))
         lines.append("")
 
-    total = sum(t.distance_mi for t in trips if t.distance_mi is not None)
-    unreported = sum(1 for t in trips if t.distance_mi is None)
-    summary = f"{len(trips)} trip(s), {round(total, 1)} mi total"
+    total = sum(t.distance_mi for t in day.trips if t.distance_mi is not None)
+    unreported = sum(1 for t in day.trips if t.distance_mi is None)
+    summary = f"{len(day.trips)} trip(s), {round(total, 1)} mi total"
     if unreported:
         summary += f" ({unreported} without a reported distance)"
     lines.append(summary)
     return "\n".join(lines) + "\n"
+
+
+def render_run(run: Run) -> str:
+    """Return every day of the run, oldest first, cut apart by a rule."""
+    if not run.days:
+        return "Nothing was captured for this range.\n"
+    return f"\n{_SEPARATOR}\n\n".join(render_day(day) for day in run.days)
