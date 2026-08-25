@@ -105,6 +105,12 @@ Measured, therefore settled:
   — the chip is part of the same web page, not Android chrome. The day does not go
   anywhere and the calendar is still reachable; the list has to be swiped back to its
   first row before anything in the app bar can be tapped.
+- **The day has a bar of its own: `‹ Tue, Aug 11, 2026 ▾ ›`.** The date names the open
+  day — the log read `Day 2026-08-15 is showing: 'Sat, Aug 15, 2026'` — the arrows either
+  side step one day, and tapping the date opens the month calendar. So the calendar is
+  needed once, for the first day of a run; every day after it is one tap on the right
+  arrow. The calendar stays as the fallback for when the arrows are not there or do not
+  move the day.
 - **A row is not clickable to be tappable.** These are virtual web nodes: the node holding
   the label and the node holding the click handler are not the same, so requiring
   `clickable="true"` throws away the chip. Taps go to coordinates; what keeps the wrong

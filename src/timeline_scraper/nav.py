@@ -3,7 +3,7 @@
 import logging
 import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -366,6 +366,129 @@ def open_calendar(
     )
 
 
+# What the day bar reads: "Tue, Aug 11, 2026", measured on the phone.
+_SHOWN_FORMATS = ("%a, %b %d, %Y", "%A, %B %d, %Y", "%b %d, %Y", "%B %d, %Y")
+# Names the arrows either side of that date might carry.
+_NEXT_WORDS = ("next day", "next date", "forward one day", "following day")
+_PREV_WORDS = ("previous day", "previous date", "back one day", "prior day")
+# Stepping day by day beats reopening the calendar, but only for a short walk.
+_MAX_STEPS = 7
+
+
+def _parse_shown_date(value: str) -> date | None:
+    """Return the date a day-bar label names, or None if it names no date."""
+    text = value.strip().rstrip("\u25be\u25bc").strip()
+    for fmt in _SHOWN_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def shown_date(root: ET.Element) -> tuple[ET.Element, date] | None:
+    """Return the day bar and the date it names, if it is on screen.
+
+    The bar sits above the day list — "‹ Tue, Aug 11, 2026 ▾ ›" — and the date
+    it carries is the one thing on the screen that says which day is open.
+    """
+    for node in root.iter("node"):
+        for value in (node.get("text", ""), node.get("content-desc", "")):
+            if not value:
+                continue
+            found = _parse_shown_date(value)
+            if found is not None and _bounds_rect(node.get("bounds", "")):
+                return node, found
+    return None
+
+
+def _step_arrow(root: ET.Element, bar: ET.Element, forward: bool) -> ET.Element | None:
+    """Return the arrow that steps one day from the day bar, or None.
+
+    A named arrow wins. Otherwise it is the node furthest along the same row
+    as the date, on the side the step goes: the arrows sit either end of that
+    row and nothing else shares it.
+    """
+    words = _NEXT_WORDS if forward else _PREV_WORDS
+    for node in root.iter("node"):
+        haystack = f"{node.get('text', '')} {node.get('content-desc', '')}".lower()
+        if any(word in haystack for word in words) and _bounds_rect(node.get("bounds", "")):
+            logger.debug("Step arrow found by name: %r", haystack.strip())
+            return node
+
+    rect = _bounds_rect(bar.get("bounds", ""))
+    if rect is None:
+        return None
+    left, top, right, bottom = rect
+    middle = (top + bottom) // 2
+    height = bottom - top
+
+    best: tuple[int, ET.Element] | None = None
+    for node in root.iter("node"):
+        other = _bounds_rect(node.get("bounds", ""))
+        if other is None or other == rect:
+            continue
+        if abs((other[1] + other[3]) // 2 - middle) > height:
+            continue          # not on the day bar's row
+        if forward and other[0] < right:
+            continue          # not clear of the date, so not the right arrow
+        if not forward and other[2] > left:
+            continue
+        centre = (other[0] + other[2]) // 2
+        rank = centre if forward else -centre
+        if best is None or rank > best[0]:
+            best = (rank, node)
+
+    return best[1] if best else None
+
+
+def _step_days(
+    target: date,
+    bar: ET.Element,
+    current: date,
+    root: ET.Element,
+    serial: str | None = None,
+) -> bool:
+    """Walk the day bar's arrows from the open day to the target.
+
+    Returns False as soon as a tap fails to move the day, so the caller can
+    fall back to the calendar rather than collect whatever is on screen.
+    """
+    forward = target > current
+    steps = abs((target - current).days)
+    logger.info(
+        "Stepping %d day(s) %s from %s with the day bar's arrow",
+        steps,
+        "forward" if forward else "back",
+        current.isoformat(),
+    )
+
+    for _ in range(steps):
+        arrow = _step_arrow(root, bar, forward)
+        if arrow is None:
+            logger.warning("No %s arrow beside the date", "next-day" if forward else "previous-day")
+            return False
+        tap_element(arrow, serial=serial)
+        time.sleep(_TAP_WAIT_S)
+
+        root = dump_ui(serial=serial)
+        found = shown_date(root)
+        if found is None:
+            logger.warning("The day bar is gone after tapping the arrow")
+            return False
+        bar, moved = found
+        expected = current + timedelta(days=1 if forward else -1)
+        if moved != expected:
+            logger.warning(
+                "The arrow moved the day to %s, not %s", moved.isoformat(), expected.isoformat()
+            )
+            return False
+        current = moved
+        logger.info("Day bar now reads %s", current.isoformat())
+
+    return current == target
+
+
 def _confirm_day(target: date, serial: str | None = None) -> bool:
     """Return True if the screen names the day that was asked for.
 
@@ -373,6 +496,17 @@ def _confirm_day(target: date, serial: str | None = None) -> bool:
     requested, so what the screen says is read back and logged either way.
     """
     root = dump_ui(serial=serial)
+    found = shown_date(root)
+    if found is not None:
+        _, current = found
+        if current == target:
+            logger.info("Day bar reads %s", target.isoformat())
+            return True
+        logger.warning(
+            "Day bar reads %s, not %s", current.isoformat(), target.isoformat()
+        )
+        return False
+
     wanted = _day_labels(target)
     for node in root.iter("node"):
         for value in (node.get("text", ""), node.get("content-desc", "")):
@@ -388,22 +522,13 @@ def _confirm_day(target: date, serial: str | None = None) -> bool:
     return False
 
 
-def go_to_date(
+def _pick_from_calendar(
     target: date,
     serial: str | None = None,
     dump_dir: Path | None = None,
-) -> bool:
-    """From the Timeline screen, open the calendar and select a specific date.
-
-    Returns whether the opened day could be confirmed on screen. Does not page
-    across months yet — the target date must fall within whatever month the
-    calendar opens to.
-
-    Raises:
-        RuntimeError: If the calendar cannot be opened or the day cell is missing.
-    """
+) -> None:
+    """Open the month calendar and tap the target's day cell."""
     root = open_calendar(target, serial=serial, dump_dir=dump_dir)
-
     label = _accessible_date_label(target)
     day_node = find_element_by_text(root, label)
     if day_node is None:
@@ -418,4 +543,36 @@ def go_to_date(
     logger.info("Tapping calendar day: %r", label)
     tap_element(day_node, serial=serial)
     time.sleep(_TAP_WAIT_S)
+
+
+def go_to_date(
+    target: date,
+    serial: str | None = None,
+    dump_dir: Path | None = None,
+) -> bool:
+    """Put the Timeline on a given day and say whether the screen confirms it.
+
+    The day bar above the list carries the open date between two arrows, so a
+    day next to the one already open is one tap away. The calendar is for the
+    first day of a run and for anything the arrows cannot reach: it is the
+    slower path and the one that can miss.
+
+    Raises:
+        RuntimeError: If the calendar cannot be opened or the day cell is missing.
+    """
+    scroll_to_top(serial=serial)
+    root = dump_ui(serial=serial)
+    found = shown_date(root)
+
+    if found is not None:
+        bar, current = found
+        if current == target:
+            logger.info("Day bar already reads %s", target.isoformat())
+            return True
+        if abs((target - current).days) <= _MAX_STEPS:
+            if _step_days(target, bar, current, root, serial=serial):
+                return _confirm_day(target, serial=serial)
+            logger.warning("Stepping failed; falling back to the calendar")
+
+    _pick_from_calendar(target, serial=serial, dump_dir=dump_dir)
     return _confirm_day(target, serial=serial)
