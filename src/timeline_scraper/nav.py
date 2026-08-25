@@ -7,8 +7,8 @@ from datetime import date, datetime
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from .adb import ADBError, dump_ui, dump_ui_xml, shell, tap
-from .extract import parse_bounds_center
+from .adb import ADBError, dump_ui, dump_ui_xml, keyevent, shell, tap
+from .extract import parse_bounds_center, scroll_to_top
 from .naming import stamp_date
 
 logger = logging.getLogger(__name__)
@@ -169,15 +169,20 @@ _DATE_RE = re.compile(
     r"\b(" + "|".join((*_MONTH_NAMES, *_MONTH_ABBR)) + r")\b.*?\d",
     re.IGNORECASE,
 )
+# What a calendar day cell reads: "Thursday, August 20, 2026".
+_DAY_CELL_RE = re.compile(
+    r"^[A-Za-z]+day,\s+(" + "|".join(_MONTH_NAMES) + r")\s+\d{1,2},\s+\d{4}$"
+)
+# Icon-only controls carry no date, only a name for what they open.
+_CALENDAR_WORDS = ("calendar", "choose date", "select date", "date picker", "show date")
+
+# The chip sits in the app bar. Rows of the day list start below it, and one
+# of those must never be tapped by mistake.
+_TOP_STRIP = 0.25
 
 
 def _day_labels(d: date) -> tuple[str, ...]:
-    """Return the spellings of one date the screen might carry.
-
-    The calendar cell was measured to read "Thursday, August 20, 2026". What
-    the day screen itself reads has not been measured, so the shorter forms
-    are checked too.
-    """
+    """Return the spellings of one date the screen might carry."""
     return (
         _accessible_date_label(d),
         f"{_MONTH_NAMES[d.month - 1]} {d.day}",
@@ -198,20 +203,24 @@ def _bounds_rect(value: str) -> tuple[int, int, int, int] | None:
         )
     except ValueError:
         return None
+    if right <= left or bottom <= top:
+        return None
     return left, top, right, bottom
 
 
-def top_labels(root: ET.Element, fraction: float = 0.15) -> list[str]:
-    """Return what is written across the top of the screen, topmost first.
-
-    This is the measurement the day screen has never given up: what the
-    calendar chip reads once a day other than today is showing.
-    """
+def _screen_height(root: ET.Element) -> int:
+    """Return the tallest bottom edge in the tree — the screen height."""
     height = 0
     for node in root.iter("node"):
         rect = _bounds_rect(node.get("bounds", ""))
         if rect:
             height = max(height, rect[3])
+    return height
+
+
+def top_labels(root: ET.Element, fraction: float = _TOP_STRIP) -> list[str]:
+    """Return what is written across the top of the screen, topmost first."""
+    height = _screen_height(root)
     if not height:
         return []
 
@@ -243,42 +252,118 @@ def _save_dump(xml: str, dump_dir: Path | None, label: str, target: date) -> Pat
     return path
 
 
-def _find_calendar_control(root: ET.Element) -> ET.Element | None:
-    """Return the control that opens the month calendar.
+def _calendar_candidates(root: ET.Element) -> list[tuple[str, ET.Element]]:
+    """Return what might open the month calendar, best first.
 
-    On the Timeline screen as Maps opens it, the control reads "Today" — that
-    is measured. Every day is reached from that freshly launched screen, so
-    the fallback below only matters if Maps restores a day despite the
-    force-stop: the topmost clickable node that reads like a date at all,
-    since the chip lives in the app bar. Which one matched is logged.
+    Clickability is not required. These are virtual nodes of a web page: the
+    node carrying the label and the node carrying the click handler are not
+    the same, and a tap lands on screen coordinates either way. What keeps a
+    trip row from being tapped is position — only the app bar is searched —
+    and the check that the calendar actually opened afterwards.
     """
-    node = find_element_by_text(root, "Today")
-    if node is not None:
-        logger.debug("Calendar control found by its 'Today' label")
-        return node
+    height = _screen_height(root) or 1
+    exact: list[tuple[int, ET.Element]] = []
+    dated: list[tuple[int, ET.Element]] = []
+    named: list[tuple[int, ET.Element]] = []
+    rest: list[tuple[int, ET.Element]] = []
 
-    candidates: list[tuple[int, ET.Element]] = []
     for node in root.iter("node"):
-        if node.get("clickable") != "true":
+        rect = _bounds_rect(node.get("bounds", ""))
+        if not rect:
             continue
-        for value in (node.get("text", ""), node.get("content-desc", "")):
-            if value and _looks_like_a_date(value):
-                point = parse_bounds_center(node.get("bounds", ""))
-                if point is not None:
-                    candidates.append((point[1], node))
-                break
+        text = node.get("text", "")
+        desc = node.get("content-desc", "")
+        rid = node.get("resource-id", "").lower()
+        top = rect[1]
 
-    if not candidates:
-        return None
-    candidates.sort(key=lambda pair: pair[0])
-    top, node = candidates[0]
-    logger.warning(
-        "No 'Today' label; falling back to a date-like control at y=%d: text=%r desc=%r",
-        top,
-        node.get("text"),
-        node.get("content-desc"),
+        if "Today" in (text, desc):
+            exact.append((top, node))
+            continue
+        if top > height * _TOP_STRIP:
+            continue
+        if any(_looks_like_a_date(v) for v in (text, desc) if v):
+            dated.append((top, node))
+            continue
+        haystack = f"{text} {desc} {rid}".lower()
+        if any(word in haystack for word in _CALENDAR_WORDS):
+            named.append((top, node))
+        elif text or desc:
+            # Last resort: the chip may read something this code has never
+            # seen ("Yesterday"). Tapping it is safe — the calendar either
+            # opens or the tap is undone.
+            rest.append((top, node))
+
+    candidates: list[tuple[str, ET.Element]] = []
+    for why, group in (
+        ("'Today'", exact),
+        ("a date label", dated),
+        ("its name", named),
+        ("guesswork", rest),
+    ):
+        for _, node in sorted(group, key=lambda pair: pair[0]):
+            candidates.append((why, node))
+    return candidates
+
+
+def _calendar_is_open(root: ET.Element) -> bool:
+    """Return True if day cells are on screen, i.e. the calendar opened."""
+    for node in root.iter("node"):
+        for value in (node.get("content-desc", ""), node.get("text", "")):
+            if value and _DAY_CELL_RE.match(value):
+                return True
+    return False
+
+
+def open_calendar(
+    target: date,
+    serial: str | None = None,
+    dump_dir: Path | None = None,
+    max_taps: int = 4,
+) -> ET.Element:
+    """Open the month calendar from the Timeline screen and return its tree.
+
+    The day list is put back at its first row first: collecting a day leaves
+    the list at the bottom, and the date header scrolls away with it. Then the
+    candidates in the app bar are tapped in turn until day cells appear —
+    tapping and checking, rather than assuming which node is the chip.
+
+    Raises:
+        RuntimeError: If no tap opened the calendar.
+    """
+    scroll_to_top(serial=serial)
+
+    xml = dump_ui_xml(serial=serial)
+    root = ET.fromstring(xml)
+    if _calendar_is_open(root):
+        logger.info("Calendar is already open")
+        return root
+
+    candidates = _calendar_candidates(root)
+    logger.debug("Calendar candidates: %d", len(candidates))
+
+    for why, node in candidates[:max_taps]:
+        logger.info(
+            "Opening the calendar by %s: text=%r desc=%r bounds=%s",
+            why,
+            node.get("text"),
+            node.get("content-desc"),
+            node.get("bounds"),
+        )
+        tap_element(node, serial=serial)
+        time.sleep(_TAP_WAIT_S)
+        opened = dump_ui(serial=serial)
+        if _calendar_is_open(opened):
+            return opened
+        logger.warning("That tap did not open the calendar; stepping back")
+        keyevent("KEYCODE_BACK", serial=serial)
+        time.sleep(_TAP_WAIT_S)
+
+    path = _save_dump(xml, dump_dir, "calendar-not-found", target)
+    raise RuntimeError(
+        "Nothing on the Timeline screen opened the calendar. The top of the "
+        f"screen reads: {top_labels(root) or 'nothing with a label'}."
+        + (f" The screen is saved as {path}." if path else "")
     )
-    return node
 
 
 def _confirm_day(target: date, serial: str | None = None) -> bool:
@@ -310,32 +395,21 @@ def go_to_date(
 ) -> bool:
     """From the Timeline screen, open the calendar and select a specific date.
 
-    Taps the control that opens the month calendar, then taps the day cell
-    whose content-desc matches the target date's accessible label. Returns
-    whether the opened day could be confirmed on screen. Does not page across
-    months yet — the target date must fall within whatever month the calendar
-    opens to.
+    Returns whether the opened day could be confirmed on screen. Does not page
+    across months yet — the target date must fall within whatever month the
+    calendar opens to.
 
     Raises:
-        RuntimeError: If the calendar control or the target day cell isn't found.
+        RuntimeError: If the calendar cannot be opened or the day cell is missing.
     """
-    xml = dump_ui_xml(serial=serial)
-    control = _find_calendar_control(ET.fromstring(xml))
-    if control is None:
-        path = _save_dump(xml, dump_dir, "calendar-not-found", target)
-        raise RuntimeError(
-            "Calendar control not found on the Timeline screen: no 'Today' label "
-            "and nothing clickable that reads like a date."
-            + (f" The screen is saved as {path}." if path else "")
-        )
-    tap_element(control, serial=serial)
-    time.sleep(_TAP_WAIT_S)
+    root = open_calendar(target, serial=serial, dump_dir=dump_dir)
 
-    xml = dump_ui_xml(serial=serial)
     label = _accessible_date_label(target)
-    day_node = find_element_by_text(ET.fromstring(xml), label)
+    day_node = find_element_by_text(root, label)
     if day_node is None:
-        path = _save_dump(xml, dump_dir, "day-cell-not-found", target)
+        path = _save_dump(
+            ET.tostring(root, encoding="unicode"), dump_dir, "day-cell-not-found", target
+        )
         raise RuntimeError(
             f"Calendar day cell not found for {label!r}. The calendar does not "
             "page across months yet, so the date must be in the month it opens to."

@@ -135,13 +135,9 @@ def _load_run(partial_path: Path, start: date, end: date, total: int) -> Run:
 def _scrape_day(target: date, serial: str, dump_dir: Path) -> DayResult:
     """Open one day on the phone and reduce it to the trips that get exported.
 
-    Maps is relaunched for every day rather than driven from the day already
-    on screen. The Timeline screen Maps opens with is the one measured to
-    carry the "Today" control; what the screen reads once a day is showing is
-    not known, and a run that guesses at it loses every day after the first.
+    Maps stays where it is between days: the day already on screen is the
+    Timeline screen, and the calendar reopens from it.
     """
-    launch_maps(serial=serial)
-    reach_timeline(serial=serial)
     confirmed = go_to_date(target, serial=serial, dump_dir=dump_dir)
     time.sleep(_DAY_SETTLE_S)
     day = build_day(target.isoformat(), collect_day(serial=serial))
@@ -189,8 +185,13 @@ def cmd_scrape(args: argparse.Namespace) -> int:
             wake_screen(serial=serial)
             if is_locked(serial=serial):
                 input("  Phone is locked. Unlock it and press Enter to continue...")
+            launch_maps(serial=serial)
+            reach_timeline(serial=serial)
         except ADBError as exc:
             logger.error("ADB error: %s", exc)
+            return 1
+        except RuntimeError as exc:
+            logger.error("%s", exc)
             return 1
 
         for position, target in enumerate(pending, start=1):

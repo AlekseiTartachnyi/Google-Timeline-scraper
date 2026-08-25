@@ -90,12 +90,16 @@ Measured, therefore settled:
   stops on a chrome button ("Backup enabled."). Nothing in the list can be selected before
   it is activated. Touch is the only way in. Do not re-propose focus navigation.
 - **Rows are virtual accessibility nodes of a web page**, not Android views.
-- **Once a day is open, the calendar chip is gone.** After a day is selected the screen
-  carries no "Today" label and nothing clickable that reads like a date, so the calendar
-  cannot be reopened from there. Measured on 2026-Aug-25: the first day scraped fine and
-  the six after it all failed with "Calendar control not found". Every day is therefore
-  reached from a freshly launched Maps — force-stop, launch, Timeline, calendar — which is
-  the one path known to work.
+- **The date chip scrolls away with the list.** Measured on 2026-Aug-25: the first day
+  scraped fine and the six after it failed with "Calendar control not found". Collecting a
+  day leaves the list at the bottom, and at the bottom the tree carries no date row at all
+  — the chip is part of the same web page, not Android chrome. The day does not go
+  anywhere and the calendar is still reachable; the list has to be swiped back to its
+  first row before anything in the app bar can be tapped.
+- **A row is not clickable to be tappable.** These are virtual web nodes: the node holding
+  the label and the node holding the click handler are not the same, so requiring
+  `clickable="true"` throws away the chip. Taps go to coordinates; what keeps the wrong
+  thing from being tapped is position plus checking afterwards that the calendar opened.
 
 Not measured, therefore not to be asserted:
 

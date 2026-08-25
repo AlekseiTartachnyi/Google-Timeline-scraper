@@ -114,6 +114,30 @@ def collect_day(serial: str | None = None, max_swipes: int = 40) -> list[str]:
     return collected
 
 
+def scroll_to_top(serial: str | None = None, max_swipes: int = 40) -> None:
+    """Swipe the day list back to its first row.
+
+    Collecting a day leaves the list at the bottom. The date header and the
+    calendar chip scroll with the page — they are rows of the same web view,
+    not Android chrome — so the way back to the calendar starts with putting
+    the top of the list back on screen.
+    """
+    width, height = adb.screen_size(serial=serial)
+    x = width // 2
+    previous: list[str] | None = None
+
+    for swipe_index in range(max_swipes):
+        current = descriptions(flatten(adb.dump_ui(serial=serial)))[:3]
+        if current and current == previous:
+            logger.debug("Day list is back at the top after %d swipe(s)", swipe_index)
+            return
+        previous = current
+        adb.swipe(x, int(height * 0.35), x, int(height * 0.80), 400, serial=serial)
+        time.sleep(_SCROLL_SETTLE_S)
+
+    logger.warning("Day list still moving after %d swipes down", max_swipes)
+
+
 def parse_bounds_center(bounds: str) -> tuple[int, int] | None:
     """Return the center pixel of a bounds string '[l,t][r,b]', or None.
 
