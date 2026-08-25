@@ -1,7 +1,9 @@
 """ADB wrappers — thin subprocess layer for all phone interactions."""
 
 import logging
+import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -9,18 +11,78 @@ from xml.etree import ElementTree as ET
 
 logger = logging.getLogger(__name__)
 
-_ADB = "adb"
+# Where platform-tools ends up when it is installed but never added to PATH.
+_ADB_FALLBACKS = (
+    r"%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe",
+    r"%USERPROFILE%\scoop\shims\adb.exe",
+    r"%ProgramData%\chocolatey\bin\adb.exe",
+    r"%ProgramFiles%\platform-tools\adb.exe",
+    r"%USERPROFILE%\platform-tools\adb.exe",
+    r"C:\platform-tools\adb.exe",
+    "~/Android/Sdk/platform-tools/adb",
+    "~/Library/Android/sdk/platform-tools/adb",
+    "/usr/lib/android-sdk/platform-tools/adb",
+    "/usr/local/bin/adb",
+)
+
+_resolved_adb: str | None = None
 
 
 class ADBError(RuntimeError):
-    """Raised when an adb command returns a non-zero exit code."""
+    """Raised when an adb command fails, or adb itself cannot be found."""
+
+
+def adb_path() -> str:
+    """Return the adb executable to run, looking beyond PATH if need be.
+
+    PATH is the normal answer, but a terminal opened before platform-tools was
+    installed — or one that never had it — does not carry it, and the raw
+    "The system cannot find the file specified" says nothing useful. The ADB
+    environment variable wins if it is set; otherwise the usual install
+    locations are checked before giving up.
+    """
+    global _resolved_adb
+    if _resolved_adb:
+        return _resolved_adb
+
+    override = os.environ.get("ADB")
+    if override:
+        found = shutil.which(override) or (override if Path(override).is_file() else None)
+        if not found:
+            raise ADBError(f"ADB is set to {override!r}, but there is no such executable")
+        logger.info("Using adb from the ADB environment variable: %s", found)
+        _resolved_adb = found
+        return _resolved_adb
+
+    found = shutil.which("adb")
+    if found:
+        _resolved_adb = found
+        return _resolved_adb
+
+    for candidate in _ADB_FALLBACKS:
+        expanded = Path(os.path.expandvars(os.path.expanduser(candidate)))
+        if "%" in str(expanded):
+            continue
+        if expanded.is_file():
+            logger.warning("adb is not on PATH; using %s", expanded)
+            _resolved_adb = str(expanded)
+            return _resolved_adb
+
+    raise ADBError(
+        "adb was not found. Install Android platform-tools and add the folder "
+        "holding adb.exe to PATH, or point this run at it with the ADB "
+        r"environment variable, e.g. set ADB=C:\platform-tools\adb.exe"
+    )
 
 
 def _run(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     """Run an adb command and return the CompletedProcess."""
-    cmd = [_ADB, *args]
+    cmd = [adb_path(), *args]
     logger.debug("$ %s", " ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError as exc:
+        raise ADBError(f"Could not run {cmd[0]}: {exc}") from exc
     if check and result.returncode != 0:
         raise ADBError(
             f"adb {' '.join(args)} exited {result.returncode}: "
@@ -127,10 +189,13 @@ def screencap(serial: str | None = None) -> bytes:
     Uses exec-out to stream directly without writing to /sdcard.
     """
     prefix = ["-s", serial] if serial else []
-    result = subprocess.run(
-        [_ADB, *prefix, "exec-out", "screencap", "-p"],
-        capture_output=True,
-    )
+    try:
+        result = subprocess.run(
+            [adb_path(), *prefix, "exec-out", "screencap", "-p"],
+            capture_output=True,
+        )
+    except OSError as exc:
+        raise ADBError(f"Could not run adb: {exc}") from exc
     if result.returncode != 0:
         raise ADBError(f"screencap failed: {result.stderr.decode().strip()}")
     return result.stdout

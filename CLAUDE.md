@@ -24,6 +24,15 @@ range is `--start YYYY-MM-DD --end YYYY-MM-DD`; a single day is the same date in
 On Windows use `py`, not `python`. The `python` command is intercepted by a Windows
 App Execution Alias and redirects to the Microsoft Store.
 
+`adb` has to be reachable. Normally it is on PATH; a terminal that does not carry it is
+told where to look instead — one command, then the scrape in the same window:
+
+```
+set ADB=C:\platform-tools\adb.exe
+```
+
+The run says which adb it used when it is not the one on PATH.
+
 ## Folders
 
 Everything is written under `exports/` in the repo root. It is gitignored, so nothing
