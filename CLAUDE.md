@@ -28,9 +28,24 @@ personal reaches a commit.
 
 ```
 exports/
-    timeline_20260820.json    driving and missing travel, endpoints resolved
-    timeline_20260820.txt     the same day as the numbered report
+    timeline_2026-Aug-20_15-30.json    driving and missing travel, endpoints resolved
+    timeline_2026-Aug-20_15-30.txt     the same day as the numbered report
 ```
+
+The date is the day that was scraped; `_HH-MM` is when it was collected. Google keeps
+revising a day for a while after it happens, so a second scrape of the same day must not
+overwrite the first — every draft keeps its own name.
+
+A finished multi-day export (M3 onward) is named for its range and carries no collection
+time, because it is the settled result and a re-run replaces it:
+
+```
+exports/
+    timeline_2026-Aug-20 - 2026-Aug-24.json
+```
+
+Both names are built in `naming.py`. Months come from a table there, never from
+`strftime('%b')`, which follows the laptop's regional setting.
 
 Folder and file names are English only. `debug_dumps/` and `draft-screenshots/` are dead —
 nothing writes to them any more; delete them if they are still on the laptop.
@@ -236,6 +251,7 @@ src/timeline_scraper/
     model.py    — Visit / Trip / Day dataclasses + JSON serialization
     extract.py  — UI dump -> ordered descriptions, scroll + dedupe, bounds helper
     parse.py    — descriptions -> visits and trips, endpoint linking
+    naming.py   — export file names and the report's date header, English month table
     report.py   — a day rendered as the numbered list checked by eye
     flatten.py  — (M4) JSON -> CSV
 ```

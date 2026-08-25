@@ -3,12 +3,13 @@
 import argparse
 import logging
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from .adb import ADBError, devices, is_locked, wake_screen
 from .extract import collect_day
 from .model import write_trips_json
+from .naming import draft_stem
 from .nav import go_to_date, launch_maps, reach_timeline
 from .parse import build_day
 from .report import render_day
@@ -59,7 +60,7 @@ def cmd_scrape(args: argparse.Namespace) -> int:
 
     target = _M2_TEST_DATE
     out_dir = Path(args.out).expanduser() if args.out else _DEFAULT_OUT_DIR
-    stem = f"timeline_{target.strftime('%Y%m%d')}"
+    stem = draft_stem(target, datetime.now())
     json_path = out_dir / f"{stem}.json"
     report_path = out_dir / f"{stem}.txt"
 

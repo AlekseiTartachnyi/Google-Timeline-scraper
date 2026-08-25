@@ -11,9 +11,14 @@ The per-trip map screenshot is **not** part of this milestone. See the last sect
 ## Output
 
 ```
-exports/timeline_20260820.json
-exports/timeline_20260820.txt
+exports/timeline_2026-Aug-20_15-30.json
+exports/timeline_2026-Aug-20_15-30.txt
 ```
+
+The date names the day that was scraped, `_HH-MM` names when it was collected. A day is
+scraped more than once — Google keeps revising it for a while — so drafts never overwrite
+each other. A finished range (M3 onward) drops the time and is named
+`timeline_2026-Aug-20 - 2026-Aug-24`. Both stems come from `naming.py`.
 
 The report is printed to the console as well, so a run ends with the day on screen.
 
@@ -64,6 +69,8 @@ No match leaves the endpoint empty.
 - `parse.build_day` — descriptions to `Visit` / `Trip`, action rows (`Yes`, `Edit`,
   `Add travel`) dropped, endpoints linked, missing visits flagged.
 - `model.write_trips_json` — filters to the reported modes and writes the JSON.
+- `naming.draft_stem` / `naming.range_stem` — the file names, with an English month table
+  rather than a locale-dependent `strftime`.
 - `report.render_day` — the numbered list above.
 
 ## The map screenshot, and why it is parked

@@ -10,6 +10,7 @@ simply did not line up.
 from datetime import date as date_type
 
 from .model import REPORTED_MODES, Day, Trip
+from .naming import header_date
 
 # Google recorded a stop there but not where it was.
 _MISSING = "Missing visit"
@@ -25,7 +26,7 @@ def _header_date(iso_date: str) -> str:
         parsed = date_type.fromisoformat(iso_date)
     except ValueError:
         return iso_date
-    return parsed.strftime("%Y, %b, %d, %a")
+    return header_date(parsed)
 
 
 def _place(name: str | None, address: str | None, missing: bool) -> str:
