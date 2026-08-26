@@ -99,16 +99,18 @@ segment keeps its complete `raw_text` alongside best-effort fields:
 }
 ```
 
-**CSV** is the mileage sheet: one row per drive, six columns, nothing to skip over.
+**CSV** is the mileage sheet: one row per trip, seven columns, nothing to skip over, and a
+blank line between days.
 
 ```
-date, from_address, departure_time, to_address, arrival_time, miles
+date, from_address, departure_time, to_address, arrival_time, miles, mode
 ```
 
-Only driving reaches it — a `Missing travel` gap has no miles to claim, and is written only
-when `--include-missing` asks for it. A field the scrape could not fill is left empty rather
-than guessed, and a drive that crossed midnight is written once, on the day it started, so
-its distance is not claimed on both days.
+`mode` sits past the miles and reads `Driving`, or `Missing travel` where Maps recorded
+travel it could not describe — those rows stay in, so a hole in the record is visible in the
+day it belongs to. A field the scrape could not fill says `missing information` rather than
+being guessed or left blank, and a drive that crossed midnight is written once, on the day it
+started, so its distance is not claimed on both days.
 
 ## Project structure
 

@@ -189,11 +189,14 @@ Dates are **hardcoded during M1–M5 for testing**; interactive prompts are wire
 
 ### M4 — 7 days -> CSV
 - `flatten` command turns the 7-day JSON into the mileage sheet:
-  `date, from_address, departure_time, to_address, arrival_time, miles`. Six columns, driving
-  only, one row per drive — narrower than the lossless schema in §7 on purpose. The JSON stays
-  the lossless record; the sheet is what a mileage claim is read off, and every column it does
-  not need is a column somebody has to skip over on every row. `category` is not written yet:
-  labelling comes back with the interactive work in M6.
+  `date, from_address, departure_time, to_address, arrival_time, miles, mode`. Seven columns,
+  one row per trip, a blank line between days — narrower than the lossless schema in §7 on
+  purpose. The JSON stays the lossless record; the sheet is what a mileage claim is read off,
+  and every column it does not need is a column somebody has to skip over on every row.
+  `category` is not written yet: labelling comes back with the interactive work in M6.
+- A cell the scrape could not fill reads `missing information`, so a row needing hand work
+  cannot be mistaken for a complete one. `miles` is the exception and stays empty, to keep the
+  column summable; `mode` says whether the row is a `Driving` trip or a `Missing travel` gap.
 - A drive across midnight is written once, on the day it started (§9.4).
 - **Done when:** a clean CSV is produced from the JSON of a 7-day run.
 
@@ -228,7 +231,8 @@ unit tests are M6 work.
    on the other. **Half of that is done in M4:** `flatten` keeps the copy on the day the drive
    started and drops the one on the day after, so the sheet claims the 31 mi once. What is still
    open is the parsing — both copies carry no times and no endpoints, so the row reaches the CSV
-   with empty cells for departure, arrival and both addresses, and has to be completed by hand.
+   with `missing information` in departure, arrival and both addresses, and has to be completed
+   by hand.
    What settles it is the `raw_text` of those two rows.
 5. **Route distance cross-check (deferred, post-M4).** Timeline reports the length of the
    *recorded GPS track*, which inflates where the signal is poor — a 1.5 mi downtown drive can

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .adb import ADBError, devices, is_locked, wake_screen
 from .extract import collect_day
-from .flatten import total_miles, write_run_csv
+from .flatten import MISSING_INFO, row, total_miles, write_run_csv
 from .model import (
     STATUS_FAILED,
     DayResult,
@@ -303,7 +303,7 @@ def cmd_flatten(args: argparse.Namespace) -> int:
         return 1
 
     csv_path = Path(args.out).expanduser() if args.out else json_path.with_suffix(".csv")
-    kept, dropped = write_run_csv(run, csv_path, include_missing=args.include_missing)
+    kept, dropped = write_run_csv(run, csv_path)
 
     for day_date, trip in dropped:
         logger.warning(
@@ -327,12 +327,12 @@ def cmd_flatten(args: argparse.Namespace) -> int:
             len(unconfirmed),
             ", ".join(unconfirmed),
         )
-    blank = sum(1 for _, trip in kept if not (trip.start_time and trip.end_time))
-    if blank:
+    incomplete = sum(1 for day_date, trip in kept if MISSING_INFO in row(day_date, trip))
+    if incomplete:
         logger.warning(
-            "%d row(s) have an empty time; those trips need their times filled in "
-            "by hand",
-            blank,
+            "%d row(s) say '%s' in at least one cell and have to be completed by hand",
+            incomplete,
+            MISSING_INFO,
         )
 
     logger.info(
@@ -397,11 +397,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--out",
         metavar="PATH",
         help="Output CSV file (default: the input file's name with .csv)",
-    )
-    p_flatten.add_argument(
-        "--include-missing",
-        action="store_true",
-        help="Also write a row for every Missing travel gap (default: driving only)",
     )
     p_flatten.set_defaults(func=cmd_flatten)
 

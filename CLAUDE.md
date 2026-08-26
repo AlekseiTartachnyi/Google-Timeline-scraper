@@ -29,8 +29,7 @@ py -m timeline_scraper flatten
 ```
 
 Another file is `--in "exports/timeline_2026-Aug-14 - 2026-Aug-20.json"` — the quotes matter,
-the name has spaces in it — and `--out PATH` names the CSV. `--include-missing` adds a row per
-`Missing travel` gap; without it the sheet is driving only.
+the name has spaces in it — and `--out PATH` names the CSV.
 
 On Windows use `py`, not `python`. The `python` command is intercepted by a Windows
 App Execution Alias and redirects to the Microsoft Store.
@@ -285,22 +284,27 @@ Rules that must not be relaxed:
 
 ## The mileage sheet
 
-`flatten` writes six columns and nothing else:
+`flatten` writes seven columns and nothing else:
 
 ```
-date, from_address, departure_time, to_address, arrival_time, miles
+date, from_address, departure_time, to_address, arrival_time, miles, mode
 ```
 
-- Only `Driving` rows reach it. A `Missing travel` gap has no miles to claim, so it stays
-  out unless `--include-missing` asks for it; if such a gap ever does report a distance,
-  the run says so rather than dropping the number quietly.
-- An endpoint reads `place, address` when both are known, `Missing visit` when Google
-  recorded a stop it could not name, and empty when no visit lined up.
-- A field the scrape could not fill is written empty. Nothing here fills a blank in.
+- `mode` is last, past the miles: `Driving`, or `Missing travel` where Google recorded
+  travel it could not describe. Those rows stay in the sheet, in the day they belong to —
+  a visible hole is what catches a drive Maps failed to log.
+- An endpoint reads `place, address` when both are known, and `Missing visit` when Google
+  recorded a stop it could not name.
+- **A cell the scrape could not fill says `missing information`**, never blank: a row that
+  needs hand work must not read as a row that is simply short. The one exception is `miles`,
+  which stays empty so the column can still be added up — the mode beside it already says
+  why the number is not there.
+- Each day is followed by a blank line, so the days stay apart down the screen.
 - **A drive across midnight is written once.** Google lists it on both days with the same
   distance and no clock strings at all, which would claim the miles twice; the copy on the
-  second day is dropped and named in the log. The times stay empty — parsing that row is
-  still open (spec §9.4) — so the trip needs its two times filled in by hand.
+  second day is dropped and named in the log. Its times and endpoints still come out as
+  `missing information` — parsing that row is still open (spec §9.4) — so it needs
+  completing by hand.
 
 ## Key rules (from spec)
 
