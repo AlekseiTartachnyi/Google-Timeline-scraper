@@ -208,7 +208,16 @@ Dates are **hardcoded during M1–M5 for testing**; interactive prompts are wire
    "Is this where you were?") — to be provided.
 2. Tesseract OCR: treated as an optional fallback dependency; confirm it is acceptable.
 3. CSV `category`: free text by default (suggested values `business` / `personal`).
-4. **Route distance cross-check (deferred, post-M4).** Timeline reports the length of the
+4. **A trip across midnight is recorded on both days (deferred, seen in M3).** A drive that
+   left late on Sat 2026-Aug-15 and arrived at 00:17 on Sun 2026-Aug-16 came out as a trip on
+   each of the two days: same distance (31.0 mi), no times parsed, and no endpoints on either
+   copy. Google shows the segment on both days, and it reads differently from a trip inside a
+   day — the clock strings the parser expects were not there, which is why the times and the
+   endpoints came out empty. What settles it is the `raw_text` of those two rows in the export;
+   the fix decides which day owns the trip (the day it started, most likely) and drops the copy
+   on the other. Left alone for now — it inflates the mileage of a day it did not happen on,
+   so it must be settled before the CSV is used for anything.
+5. **Route distance cross-check (deferred, post-M4).** Timeline reports the length of the
    *recorded GPS track*, which inflates where the signal is poor — a 1.5 mi downtown drive can
    be reported as 4.0 mi. Once trip endpoints are derived (M2.2), the routed distance between
    them can be looked up through a directions API. Keep **both** numbers, never replace one
