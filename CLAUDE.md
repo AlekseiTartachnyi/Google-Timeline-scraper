@@ -149,7 +149,7 @@ in every one. Do not raise it again.
       endpoints resolved, missing visits named as such
 - [ ] M2 — Output path prompt, timestamped filename, overwrite/rename/cancel
 - [x] M3 — Scrape 7 days with crash-safe incremental save
-- [ ] M4 — Flatten to CSV
+- [ ] M4 — Flatten to CSV (no tests here — they are M6)
 - [ ] M5 — Full month export
 - [ ] M6 — Polish: interactive prompts, logging, tests
 

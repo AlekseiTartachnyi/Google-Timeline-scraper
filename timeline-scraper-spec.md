@@ -189,8 +189,10 @@ Dates are **hardcoded during M1–M5 for testing**; interactive prompts are wire
 
 ### M4 — 7 days -> CSV
 - `flatten` command turns the 7-day JSON into the CSV schema above.
-- Unit-tested against fixture dumps.
 - **Done when:** a clean CSV with the `category` column is produced from the JSON.
+
+Tests are not part of this milestone. Collecting the data comes first; the fixture-based
+unit tests are M6 work.
 
 ### M5 — Previous month -> CSV
 - Scrape a full previous month and flatten to CSV.
@@ -199,7 +201,9 @@ Dates are **hardcoded during M1–M5 for testing**; interactive prompts are wire
 
 ### M6 — Polish
 - Replace hardcoded test dates with interactive prompts (start, end=yesterday, output path).
-- Logging, error messages, README, tests, `.gitignore`, final cleanup for the public repo.
+- Logging, error messages, README, `.gitignore`, final cleanup for the public repo.
+- Unit tests against anonymized fixture dumps — parser, endpoint linking, naming, flatten.
+  Deferred here from M4 on purpose: nothing is tested until the whole range collects.
 - **Done when:** the repo is portfolio-ready and runs from prompts alone.
 
 ## 9. Open items
