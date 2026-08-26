@@ -21,6 +21,7 @@ from .model import (
 from .naming import draft_stem, range_stem
 from .nav import go_to_date, launch_maps, reach_timeline
 from .parse import build_day
+from .routes import CACHE_NAME, KEY_ENV, open_lookup
 from .report import render_run
 
 logger = logging.getLogger(__name__)
@@ -303,7 +304,16 @@ def cmd_flatten(args: argparse.Namespace) -> int:
         return 1
 
     csv_path = Path(args.out).expanduser() if args.out else json_path.with_suffix(".csv")
-    kept, dropped = write_run_csv(run, csv_path)
+
+    lookup = None
+    if args.routes:
+        # The cache lives beside the exports, never in the repo: it is keyed by
+        # the addresses that were driven between, and those are personal.
+        lookup = open_lookup(csv_path.parent / CACHE_NAME)
+        if lookup is None:
+            return 1
+
+    kept, dropped = write_run_csv(run, csv_path, lookup)
 
     for day_date, trip in dropped:
         logger.warning(
@@ -334,6 +344,9 @@ def cmd_flatten(args: argparse.Namespace) -> int:
             incomplete,
             MISSING_INFO,
         )
+
+    if lookup is not None:
+        logger.info("Routes API: %s", lookup.summary())
 
     logger.info(
         "Wrote %s (%d row(s), %s mi total)", csv_path, len(kept), total_miles(kept)
@@ -397,6 +410,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--out",
         metavar="PATH",
         help="Output CSV file (default: the input file's name with .csv)",
+    )
+    p_flatten.add_argument(
+        "--routes",
+        action="store_true",
+        help=(
+            "Fill the two route columns from the Google Routes API: the miles the "
+            f"road network gives with tolls and without. Needs {KEY_ENV} set, and "
+            "each new pair of addresses is a billed lookup — answers are cached in "
+            f"exports/{CACHE_NAME} and never asked for twice"
+        ),
     )
     p_flatten.set_defaults(func=cmd_flatten)
 

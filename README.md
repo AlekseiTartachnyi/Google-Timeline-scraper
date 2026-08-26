@@ -99,11 +99,12 @@ segment keeps its complete `raw_text` alongside best-effort fields:
 }
 ```
 
-**CSV** is the mileage sheet: one row per trip, seven columns, nothing to skip over, and a
+**CSV** is the mileage sheet: one row per trip, nine columns, nothing to skip over, and a
 blank line between days.
 
 ```
-date, from_address, departure_time, to_address, arrival_time, miles, mode
+date, from_address, departure_time, to_address, arrival_time,
+miles, route_mi_with_tolls, route_mi_no_tolls, mode
 ```
 
 `mode` sits past the miles and reads `Driving`, or `Missing travel` where Maps recorded
@@ -111,6 +112,21 @@ travel it could not describe — those rows stay in, so a hole in the record is 
 day it belongs to. A field the scrape could not fill says `missing information` rather than
 being guessed or left blank, and a drive that crossed midnight is written once, on the day it
 started, so its distance is not claimed on both days.
+
+`miles` is what Timeline showed: the length of the *recorded GPS track*, which wanders where
+the signal is poor. The two `route_mi_*` columns are what the road network says about the
+same two addresses — one allowing tolls, one avoiding them — and they are filled only when
+`flatten --routes` is given a Google Maps Platform API key:
+
+```
+set GOOGLE_MAPS_API_KEY=...
+python -m timeline_scraper flatten --routes
+```
+
+Neither number is corrected into the other: a detour is legitimate, so a track longer than
+the route is a row to look at, not an error to fix. Answers are cached per address pair in
+`exports/route-cache.json`, so a repeated commute is a billed lookup once and a re-run of
+`flatten` costs nothing.
 
 ## Project structure
 
@@ -125,6 +141,7 @@ timeline-scraper/
     ocr.py        # screenshot -> Tesseract fallback
     model.py      # data model + JSON (de)serialization
     flatten.py    # JSON -> CSV
+    routes.py     # routed miles from the Google Routes API
   tests/          # unit tests on parse/flatten against fixture dumps
   docs/           # spec
 ```

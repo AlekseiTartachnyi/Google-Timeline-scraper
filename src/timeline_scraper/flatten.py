@@ -16,14 +16,29 @@ from datetime import date as date_type
 from datetime import timedelta
 from itertools import groupby
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .model import Run, Trip
 
+if TYPE_CHECKING:  # the sheet is written with or without the network module
+    from .routes import RouteLookup
+
 logger = logging.getLogger(__name__)
 
+# What the road network says about one trip: (miles allowing tolls, miles
+# avoiding tolls). Either is None when the answer is not known.
+RouteMiles = tuple[float | None, float | None]
+
 # The columns of the mileage sheet, in order. `mode` sits last, past the miles:
-# the four columns before it are what a mileage claim is read off, and the mode
-# is what to check when one of them looks wrong.
+# the columns before it are what a mileage claim is read off, and the mode is
+# what to check when one of them looks wrong.
+#
+# The two route columns sit next to the miles Timeline reported, never instead
+# of them (spec §9.5). `miles` is the length of the recorded GPS track, which
+# inflates where the signal is poor; the route columns are what the road network
+# says about the same two addresses, with tolls allowed and with tolls avoided.
+# Three numbers that disagree are three numbers to look at — the sheet keeps all
+# of them and corrects none.
 HEADER = (
     "date",
     "from_address",
@@ -31,8 +46,14 @@ HEADER = (
     "to_address",
     "arrival_time",
     "miles",
+    "route_mi_with_tolls",
+    "route_mi_no_tolls",
     "mode",
 )
+
+# What a trip's routed distance looks like before anything has been looked up:
+# tolls allowed, tolls avoided, both unknown.
+NO_ROUTE: RouteMiles = (None, None)
 
 # A drive, with miles to claim.
 DRIVING = "Driving"
@@ -64,13 +85,16 @@ def endpoint(place: str | None, address: str | None, missing: bool) -> str:
     return ", ".join(part for part in (place, address) if part) or MISSING_INFO
 
 
-def row(day_date: str, trip: Trip) -> list[str]:
+def row(day_date: str, trip: Trip, route: RouteMiles = NO_ROUTE) -> list[str]:
     """Return one trip as its row of the sheet.
 
-    The miles cell stays empty when no distance was reported, rather than
-    carrying the words: a spreadsheet has to be able to add that column up, and
-    the mode beside it already says why the number is not there.
+    A miles cell stays empty when the number is not known, rather than carrying
+    the words: a spreadsheet has to be able to add those columns up, and the
+    mode beside them already says why a number is not there. That holds for the
+    two route columns as well — empty means nothing was looked up, or the
+    lookup had no address to work from.
     """
+    with_tolls, no_tolls = route
     return [
         day_date,
         endpoint(trip.from_place, trip.from_address, trip.from_missing),
@@ -78,6 +102,8 @@ def row(day_date: str, trip: Trip) -> list[str]:
         endpoint(trip.to_place, trip.to_address, trip.to_missing),
         trip.end_time or MISSING_INFO,
         "" if trip.distance_mi is None else f"{trip.distance_mi}",
+        "" if with_tolls is None else f"{with_tolls}",
+        "" if no_tolls is None else f"{no_tolls}",
         trip.mode,
     ]
 
@@ -152,20 +178,33 @@ def total_miles(trips: list[tuple[str, Trip]]) -> float:
 
 
 def write_run_csv(
-    run: Run, path: Path
+    run: Run, path: Path, lookup: "RouteLookup | None" = None
 ) -> tuple[list[tuple[str, Trip]], list[tuple[str, Trip]]]:
     """Write the run as the mileage sheet. Returns the rows kept and dropped.
 
     Each day is followed by a blank line, so the days stay apart when the sheet
     is read down the screen. The file is written with a BOM: Excel opens a plain
     UTF-8 CSV in the laptop's own code page and mangles anything outside it.
+
+    With no `lookup` the two route columns are written empty: the sheet keeps
+    the same shape whether or not the road network was asked, so a spreadsheet
+    built on top of it does not have to move its formulas between runs.
+
+    The rows are looked up only after the midnight-crossing duplicates have been
+    dropped, so a drive shown on two days is never paid for twice.
     """
     kept, dropped = collect(run)
+    routed = [
+        (day_date, trip, lookup.for_trip(trip) if lookup is not None else NO_ROUTE)
+        for day_date, trip in kept
+    ]
+    if lookup is not None:
+        lookup.save_cache()
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(HEADER)
-        for _, day_rows in groupby(kept, key=lambda pair: pair[0]):
-            writer.writerows(row(day_date, trip) for day_date, trip in day_rows)
+        for _, day_rows in groupby(routed, key=lambda triple: triple[0]):
+            writer.writerows(row(*triple) for triple in day_rows)
             writer.writerow([])
     return kept, dropped

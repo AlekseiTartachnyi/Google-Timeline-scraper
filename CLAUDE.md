@@ -28,6 +28,19 @@ in `exports/` and writes the CSV beside it, under the same name:
 py -m timeline_scraper flatten
 ```
 
+To fill the two route columns as well, set the key once in the terminal and add `--routes`:
+
+```
+set GOOGLE_MAPS_API_KEY=...
+```
+
+```
+py -m timeline_scraper flatten --routes
+```
+
+Every new pair of addresses is one billed Routes API call per toll setting, so two per trip;
+the answers are cached in `exports/route-cache.json` and never asked for twice.
+
 Another file is `--in "exports/timeline_2026-Aug-14 - 2026-Aug-20.json"` — the quotes matter,
 the name has spaces in it — and `--out PATH` names the CSV.
 
@@ -66,7 +79,12 @@ exports/
     timeline_2026-Aug-14 - 2026-Aug-20.json    every day of the range, in date order
     timeline_2026-Aug-14 - 2026-Aug-20.txt     the same range as the numbered report
     timeline_2026-Aug-14 - 2026-Aug-20.csv     the mileage sheet, one row per drive
+    route-cache.json                           routed miles already paid for
 ```
+
+`route-cache.json` is keyed by the addresses that were driven between, so it is personal
+data and lives with the exports, outside the repo. Deleting it costs money, not correctness:
+the next `--routes` run asks Google again.
 
 The CSV is derived from the JSON and carries no collection time either: re-running `flatten`
 replaces it.
@@ -284,10 +302,11 @@ Rules that must not be relaxed:
 
 ## The mileage sheet
 
-`flatten` writes seven columns and nothing else:
+`flatten` writes nine columns and nothing else:
 
 ```
-date, from_address, departure_time, to_address, arrival_time, miles, mode
+date, from_address, departure_time, to_address, arrival_time,
+miles, route_mi_with_tolls, route_mi_no_tolls, mode
 ```
 
 - `mode` is last, past the miles: `Driving`, or `Missing travel` where Google recorded
@@ -300,6 +319,12 @@ date, from_address, departure_time, to_address, arrival_time, miles, mode
   which stays empty so the column can still be added up — the mode beside it already says
   why the number is not there.
 - Each day is followed by a blank line, so the days stay apart down the screen.
+- `miles` is Timeline's own number — the length of the recorded GPS track. The two
+  `route_mi_*` columns are what the road network says between the same two addresses,
+  with tolls allowed and with tolls avoided; they stay empty unless `flatten --routes`
+  is run with a key. Both numbers are kept and neither is corrected into the other
+  (spec §9.5): a detour is legitimate, so a track longer than the route is a row to
+  review, not an error.
 - **A drive across midnight is written once.** Google lists it on both days with the same
   distance and no clock strings at all, which would claim the miles twice; the copy on the
   second day is dropped and named in the log. Its times and endpoints still come out as
@@ -330,6 +355,7 @@ src/timeline_scraper/
     naming.py   — export file names and the report's date header, English month table
     report.py   — a day rendered as the numbered list checked by eye
     flatten.py  — JSON -> the mileage CSV, one row per drive
+    routes.py   — routed miles between two addresses, Google Routes API + cache
 ```
 
 ## Before making any changes
