@@ -67,6 +67,9 @@ python -m timeline_scraper scrape --start 2026-05-01 --end 2026-06-07 --out ~/ti
 
 # Flatten the JSON into a CSV table
 python -m timeline_scraper flatten --in timeline.json --out timeline.csv
+
+# Or, with no arguments: take the newest export and write the CSV beside it
+python -m timeline_scraper flatten
 ```
 
 If `--start`, `--end`, or `--out` are omitted, the script prompts for them. The end date
@@ -96,14 +99,16 @@ segment keeps its complete `raw_text` alongside best-effort fields:
 }
 ```
 
-**CSV** columns:
+**CSV** is the mileage sheet: one row per drive, six columns, nothing to skip over.
 
 ```
-date, segment_type, start_time, end_time, duration_min, mode, distance_mi,
-from, to, place, address, note, flags, suggestions, raw_text, category
+date, from_address, departure_time, to_address, arrival_time, miles
 ```
 
-`category` is left blank for you to label each row `business` or `personal`.
+Only driving reaches it — a `Missing travel` gap has no miles to claim, and is written only
+when `--include-missing` asks for it. A field the scrape could not fill is left empty rather
+than guessed, and a drive that crossed midnight is written once, on the day it started, so
+its distance is not claimed on both days.
 
 ## Project structure
 

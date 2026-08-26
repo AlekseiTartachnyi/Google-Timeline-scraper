@@ -188,8 +188,14 @@ Dates are **hardcoded during M1–M5 for testing**; interactive prompts are wire
 - **Done when:** 7 days scrape end-to-end and survive an interruption mid-run.
 
 ### M4 — 7 days -> CSV
-- `flatten` command turns the 7-day JSON into the CSV schema above.
-- **Done when:** a clean CSV with the `category` column is produced from the JSON.
+- `flatten` command turns the 7-day JSON into the mileage sheet:
+  `date, from_address, departure_time, to_address, arrival_time, miles`. Six columns, driving
+  only, one row per drive — narrower than the lossless schema in §7 on purpose. The JSON stays
+  the lossless record; the sheet is what a mileage claim is read off, and every column it does
+  not need is a column somebody has to skip over on every row. `category` is not written yet:
+  labelling comes back with the interactive work in M6.
+- A drive across midnight is written once, on the day it started (§9.4).
+- **Done when:** a clean CSV is produced from the JSON of a 7-day run.
 
 Tests are not part of this milestone. Collecting the data comes first; the fixture-based
 unit tests are M6 work.
@@ -219,8 +225,11 @@ unit tests are M6 work.
    day — the clock strings the parser expects were not there, which is why the times and the
    endpoints came out empty. What settles it is the `raw_text` of those two rows in the export;
    the fix decides which day owns the trip (the day it started, most likely) and drops the copy
-   on the other. Left alone for now — it inflates the mileage of a day it did not happen on,
-   so it must be settled before the CSV is used for anything.
+   on the other. **Half of that is done in M4:** `flatten` keeps the copy on the day the drive
+   started and drops the one on the day after, so the sheet claims the 31 mi once. What is still
+   open is the parsing — both copies carry no times and no endpoints, so the row reaches the CSV
+   with empty cells for departure, arrival and both addresses, and has to be completed by hand.
+   What settles it is the `raw_text` of those two rows.
 5. **Route distance cross-check (deferred, post-M4).** Timeline reports the length of the
    *recorded GPS track*, which inflates where the signal is poor — a 1.5 mi downtown drive can
    be reported as 4.0 mi. Once trip endpoints are derived (M2.2), the routed distance between

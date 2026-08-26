@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .adb import ADBError, devices, is_locked, wake_screen
 from .extract import collect_day
+from .flatten import total_miles, write_run_csv
 from .model import (
     STATUS_FAILED,
     DayResult,
@@ -259,11 +260,85 @@ def cmd_scrape(args: argparse.Namespace) -> int:
 # flatten
 # ---------------------------------------------------------------------------
 
+def _newest_export(out_dir: Path) -> Path | None:
+    """Return the most recently written finished export in `out_dir`.
+
+    A partial file is skipped: it belongs to a run that has not finished, and
+    flattening it would produce a sheet with days missing from the middle.
+    """
+    finished = [
+        path
+        for path in out_dir.glob("timeline_*.json")
+        if not path.name.endswith(".partial.json")
+    ]
+    if not finished:
+        return None
+    return max(finished, key=lambda path: path.stat().st_mtime)
+
+
 def cmd_flatten(args: argparse.Namespace) -> int:
-    """Flatten a JSON scrape file to CSV (not yet implemented — target: M4)."""
+    """Flatten a scraped run to the CSV mileage sheet."""
     _setup_logging(args.verbose)
-    logger.error("flatten is not yet implemented (target: M4)")
-    return 1
+
+    if args.input:
+        json_path = Path(args.input).expanduser()
+        if not json_path.exists():
+            logger.error("No such file: %s", json_path)
+            return 1
+    else:
+        found = _newest_export(_DEFAULT_OUT_DIR)
+        if found is None:
+            logger.error(
+                "Nothing to flatten: no finished export in %s/. Scrape a range "
+                "first, or name the file with --in.",
+                _DEFAULT_OUT_DIR,
+            )
+            return 1
+        json_path = found
+        logger.info("Flattening the newest export: %s", json_path)
+
+    run = read_run_json(json_path)
+    if run is None:
+        logger.error("%s is not a scrape file this version can read", json_path)
+        return 1
+
+    csv_path = Path(args.out).expanduser() if args.out else json_path.with_suffix(".csv")
+    kept, dropped = write_run_csv(run, csv_path, include_missing=args.include_missing)
+
+    for day_date, trip in dropped:
+        logger.warning(
+            "%s: dropped a %s mi %s row that is the same drive as the one on the "
+            "day before, shown twice because it crossed midnight",
+            day_date,
+            trip.distance_mi,
+            trip.mode,
+        )
+    failed = [d.date for d in run.days if d.status == STATUS_FAILED]
+    if failed:
+        logger.warning(
+            "%d day(s) were never captured and have no rows: %s",
+            len(failed),
+            ", ".join(failed),
+        )
+    unconfirmed = [d.date for d in run.days if d.status != STATUS_FAILED and not d.confirmed]
+    if unconfirmed:
+        logger.warning(
+            "%d day(s) the phone never showed the date for: %s — check them by hand",
+            len(unconfirmed),
+            ", ".join(unconfirmed),
+        )
+    blank = sum(1 for _, trip in kept if not (trip.start_time and trip.end_time))
+    if blank:
+        logger.warning(
+            "%d row(s) have an empty time; those trips need their times filled in "
+            "by hand",
+            blank,
+        )
+
+    logger.info(
+        "Wrote %s (%d row(s), %s mi total)", csv_path, len(kept), total_miles(kept)
+    )
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -316,9 +391,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--in",
         dest="input",
         metavar="PATH",
-        help="Input JSON file",
+        help="Input JSON file (default: the newest finished export in exports/)",
     )
-    p_flatten.add_argument("--out", metavar="PATH", help="Output CSV file")
+    p_flatten.add_argument(
+        "--out",
+        metavar="PATH",
+        help="Output CSV file (default: the input file's name with .csv)",
+    )
+    p_flatten.add_argument(
+        "--include-missing",
+        action="store_true",
+        help="Also write a row for every Missing travel gap (default: driving only)",
+    )
     p_flatten.set_defaults(func=cmd_flatten)
 
     return parser

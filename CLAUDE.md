@@ -21,6 +21,17 @@ py -m timeline_scraper scrape
 With no flags this scrapes the seven days ending on the M3 test day, 2026-Aug-20. Another
 range is `--start YYYY-MM-DD --end YYYY-MM-DD`; a single day is the same date in both.
 
+Turn the export into the mileage sheet. With no flags it takes the newest finished export
+in `exports/` and writes the CSV beside it, under the same name:
+
+```
+py -m timeline_scraper flatten
+```
+
+Another file is `--in "exports/timeline_2026-Aug-14 - 2026-Aug-20.json"` — the quotes matter,
+the name has spaces in it — and `--out PATH` names the CSV. `--include-missing` adds a row per
+`Missing travel` gap; without it the sheet is driving only.
+
 On Windows use `py`, not `python`. The `python` command is intercepted by a Windows
 App Execution Alias and redirects to the Microsoft Store.
 
@@ -55,7 +66,11 @@ time, because it is the settled result and a re-run replaces it:
 exports/
     timeline_2026-Aug-14 - 2026-Aug-20.json    every day of the range, in date order
     timeline_2026-Aug-14 - 2026-Aug-20.txt     the same range as the numbered report
+    timeline_2026-Aug-14 - 2026-Aug-20.csv     the mileage sheet, one row per drive
 ```
+
+The CSV is derived from the JSON and carries no collection time either: re-running `flatten`
+replaces it.
 
 A screen that defeats the navigation is saved next to the export as
 `dump_calendar-not-found_2026-Aug-15_11-22-33.xml` (or `dump_day-cell-not-found_...`),
@@ -149,7 +164,7 @@ in every one. Do not raise it again.
       endpoints resolved, missing visits named as such
 - [ ] M2 — Output path prompt, timestamped filename, overwrite/rename/cancel
 - [x] M3 — Scrape 7 days with crash-safe incremental save
-- [ ] M4 — Flatten to CSV (no tests here — they are M6)
+- [x] M4 — Flatten to CSV (no tests here — they are M6)
 - [ ] M5 — Full month export
 - [ ] M6 — Polish: interactive prompts, logging, tests
 
@@ -167,7 +182,7 @@ push to a name the user has not been told about.
 
 ## Working branch
 
-`claude/task-m3-plan-bjjih9`
+`claude/timeline-csv-conversion-49zt4w`
 
 The branch name changes with every task. Use the branch named at the end of the reply,
 never a remembered one.
@@ -179,11 +194,11 @@ git fetch origin
 ```
 
 ```
-git checkout claude/task-m3-plan-bjjih9
+git checkout claude/timeline-csv-conversion-49zt4w
 ```
 
 ```
-git pull origin claude/task-m3-plan-bjjih9
+git pull origin claude/timeline-csv-conversion-49zt4w
 ```
 
 If local files look wrong (errors from code you did not write), throw them away:
@@ -193,7 +208,7 @@ git fetch origin
 ```
 
 ```
-git reset --hard origin/claude/task-m3-plan-bjjih9
+git reset --hard origin/claude/timeline-csv-conversion-49zt4w
 ```
 
 ## When to print the git commands
@@ -268,6 +283,25 @@ Rules that must not be relaxed:
 - Distances are recorded as reported. Correcting them is a separate, deferred task
   (spec §9.4) that keeps both numbers.
 
+## The mileage sheet
+
+`flatten` writes six columns and nothing else:
+
+```
+date, from_address, departure_time, to_address, arrival_time, miles
+```
+
+- Only `Driving` rows reach it. A `Missing travel` gap has no miles to claim, so it stays
+  out unless `--include-missing` asks for it; if such a gap ever does report a distance,
+  the run says so rather than dropping the number quietly.
+- An endpoint reads `place, address` when both are known, `Missing visit` when Google
+  recorded a stop it could not name, and empty when no visit lined up.
+- A field the scrape could not fill is written empty. Nothing here fills a blank in.
+- **A drive across midnight is written once.** Google lists it on both days with the same
+  distance and no clock strings at all, which would claim the miles twice; the copy on the
+  second day is dropped and named in the log. The times stay empty — parsing that row is
+  still open (spec §9.4) — so the trip needs its two times filled in by hand.
+
 ## Key rules (from spec)
 
 - English only — no Russian in code, comments, commits, or docs
@@ -291,7 +325,7 @@ src/timeline_scraper/
     parse.py    — descriptions -> visits and trips, endpoint linking
     naming.py   — export file names and the report's date header, English month table
     report.py   — a day rendered as the numbered list checked by eye
-    flatten.py  — (M4) JSON -> CSV
+    flatten.py  — JSON -> the mileage CSV, one row per drive
 ```
 
 ## Before making any changes
