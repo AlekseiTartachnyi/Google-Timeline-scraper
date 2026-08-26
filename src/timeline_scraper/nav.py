@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from .adb import ADBError, dump_ui, dump_ui_xml, keyevent, shell, tap
+from .adb import ADBError, dump_ui, dump_ui_xml, keyevent, screen_size, shell, swipe, tap
 from .extract import parse_bounds_center, scroll_to_top
 from .naming import stamp_date
 
@@ -36,14 +36,6 @@ def launch_maps(serial: str | None = None) -> None:
 
 
 _TIMELINE_LABELS = {"Timeline", "Your Timeline", "timeline"}
-
-
-def find_element_by_text(root: ET.Element, text: str) -> ET.Element | None:
-    """Return the first node whose text or content-desc equals text."""
-    for node in root.iter("node"):
-        if node.get("text") == text or node.get("content-desc") == text:
-            return node
-    return None
 
 
 def _find_timeline_element(root: ET.Element) -> ET.Element | None:
@@ -314,6 +306,231 @@ def _calendar_is_open(root: ET.Element) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Walking the calendar to another month
+# ---------------------------------------------------------------------------
+
+# What a control that pages the calendar a month at a time might be called.
+_NEXT_MONTH_WORDS = ("next month", "forward one month", "following month")
+_PREV_MONTH_WORDS = ("previous month", "last month", "back one month", "prior month")
+
+# The ways the calendar might be walked, tried in this order. Which one this
+# picker answers to has never been read off a dump — it is a web page inside
+# the Timeline WebView, not an Android date picker — so each is tried and
+# judged by whether the months on screen moved toward the target.
+_BY_NAME = "named control"
+_SIDEWAYS = "sideways swipe"
+_ALONG_THE_PAGE = "swipe along the page"
+_PAGE_STRATEGIES = (_BY_NAME, _SIDEWAYS, _ALONG_THE_PAGE)
+
+_PAGE_WAIT_S = 1.0
+# A walk this long is lost rather than slow: a month export starts at most a
+# handful of months back.
+_MAX_PAGES = 24
+
+
+def _cell_date(value: str) -> date | None:
+    """Return the date a calendar day cell names, or None if it names none."""
+    if not _DAY_CELL_RE.match(value):
+        return None
+    try:
+        return datetime.strptime(value, "%A, %B %d, %Y").date()
+    except ValueError:
+        return None
+
+
+def _day_cells(root: ET.Element, height: int = 0) -> list[tuple[date, ET.Element]]:
+    """Return the day cells that are on screen, with the dates they name.
+
+    A cell whose rectangle falls outside the screen is not on screen: a
+    calendar that scrolls keeps the neighbouring months in the tree, and a tap
+    aimed at one of those lands nowhere.
+    """
+    found: list[tuple[date, ET.Element]] = []
+    for node in root.iter("node"):
+        rect = _bounds_rect(node.get("bounds", ""))
+        if rect is None or rect[1] < 0 or (height and rect[3] > height):
+            continue
+        for value in (node.get("content-desc", ""), node.get("text", "")):
+            when = _cell_date(value) if value else None
+            if when is not None:
+                found.append((when, node))
+                break
+    return found
+
+
+def _month_index(year: int, month_number: int) -> int:
+    """Return a month as one number, so two of them can be subtracted."""
+    return year * 12 + month_number - 1
+
+
+def _months_shown(cells: list[tuple[date, ET.Element]]) -> set[tuple[int, int]]:
+    """Return the (year, month) pairs the visible day cells belong to."""
+    return {(when.year, when.month) for when, _ in cells}
+
+
+def _months_away(shown: set[tuple[int, int]], target: date) -> int | None:
+    """Return how far the nearest shown month is from the target's, in months."""
+    if not shown:
+        return None
+    wanted = _month_index(target.year, target.month)
+    return min(abs(_month_index(y, m) - wanted) for y, m in shown)
+
+
+def _target_is_later(shown: set[tuple[int, int]], target: date) -> bool:
+    """Return True if the target month is past the nearest month on screen."""
+    wanted = _month_index(target.year, target.month)
+    nearest = min(shown, key=lambda pair: abs(_month_index(*pair) - wanted))
+    return wanted > _month_index(*nearest)
+
+
+def _grid_rect(cells: list[tuple[date, ET.Element]]) -> tuple[int, int, int, int] | None:
+    """Return the rectangle the day cells cover, so a swipe lands on the grid."""
+    rects = [
+        rect
+        for rect in (_bounds_rect(node.get("bounds", "")) for _, node in cells)
+        if rect is not None
+    ]
+    if not rects:
+        return None
+    return (
+        min(r[0] for r in rects),
+        min(r[1] for r in rects),
+        max(r[2] for r in rects),
+        max(r[3] for r in rects),
+    )
+
+
+def _page_once(
+    strategy: str,
+    forward: bool,
+    root: ET.Element,
+    grid: tuple[int, int, int, int] | None,
+    serial: str | None = None,
+) -> bool:
+    """Move the calendar one month. Returns False if this way cannot be tried."""
+    if strategy == _BY_NAME:
+        words = _NEXT_MONTH_WORDS if forward else _PREV_MONTH_WORDS
+        for node in root.iter("node"):
+            haystack = " ".join(
+                (
+                    node.get("text", ""),
+                    node.get("content-desc", ""),
+                    node.get("resource-id", ""),
+                )
+            ).lower()
+            if any(word in haystack for word in words) and _bounds_rect(
+                node.get("bounds", "")
+            ):
+                logger.debug("Paging the calendar with %r", haystack.strip())
+                tap_element(node, serial=serial)
+                return True
+        return False
+
+    if grid is None:
+        return False
+    left, top, right, bottom = grid
+    x = (left + right) // 2
+    y = (top + bottom) // 2
+    if strategy == _SIDEWAYS:
+        span = max((right - left) // 3, 1)
+        start, end = (x + span, x - span) if forward else (x - span, x + span)
+        swipe(start, y, end, y, 400, serial=serial)
+    else:
+        span = max((bottom - top) // 3, 1)
+        start, end = (y + span, y - span) if forward else (y - span, y + span)
+        swipe(x, start, x, end, 400, serial=serial)
+    return True
+
+
+def page_to_month(
+    target: date,
+    root: ET.Element,
+    serial: str | None = None,
+    height: int = 0,
+    dump_dir: Path | None = None,
+) -> ET.Element:
+    """Walk the open calendar until the target's month is on screen.
+
+    The calendar opens on the month of the day already showing, so a month
+    collected after it ended — a whole July read off the phone in August — has
+    to be walked back before its first day can be tapped. Each way of walking
+    it is tried in turn and judged by what the screen then shows: the one that
+    moves the calendar toward the target is kept for the rest of the walk, one
+    that moves it the wrong way is reversed, and one that moves nothing is
+    dropped for the next.
+
+    Raises:
+        RuntimeError: If no way of walking it reached the target's month.
+    """
+    cells = _day_cells(root, height)
+    shown = _months_shown(cells)
+    away = _months_away(shown, target)
+    wanted = f"{target.year}-{target.month:02d}"
+
+    if away is None:
+        raise RuntimeError(
+            "The calendar is open but carries no day cell this code can read."
+        )
+    if away == 0:
+        return root
+
+    logger.info(
+        "The calendar shows %s; walking %d month(s) to reach %s",
+        ", ".join(sorted(f"{y}-{m:02d}" for y, m in shown)),
+        away,
+        wanted,
+    )
+
+    strategies = list(_PAGE_STRATEGIES)
+    reversed_walk = False
+
+    for _ in range(_MAX_PAGES):
+        if not strategies:
+            break
+        strategy = strategies[0]
+        forward = _target_is_later(shown, target) != reversed_walk
+
+        if not _page_once(strategy, forward, root, _grid_rect(cells), serial=serial):
+            logger.info("The calendar has no %s; trying another way", strategy)
+            strategies.pop(0)
+            reversed_walk = False
+            continue
+
+        time.sleep(_PAGE_WAIT_S)
+        root = dump_ui(serial=serial)
+        cells = _day_cells(root, height)
+        shown = _months_shown(cells)
+        moved = _months_away(shown, target)
+
+        if moved is None:
+            logger.warning("The day cells are gone after paging the calendar")
+            break
+        if moved == 0:
+            logger.info("The calendar reached %s by a %s", wanted, strategy)
+            return root
+        if moved == away:
+            logger.warning("A %s moved no month; trying another way", strategy)
+            strategies.pop(0)
+            reversed_walk = False
+            continue
+        if moved > away:
+            reversed_walk = not reversed_walk
+            logger.info("A %s walked away from %s; reversing it", strategy, wanted)
+        else:
+            logger.info("%s month(s) to go", moved)
+        away = moved
+
+    path = _save_dump(
+        ET.tostring(root, encoding="unicode"), dump_dir, "month-not-reached", target
+    )
+    raise RuntimeError(
+        f"The calendar would not walk to {wanted}. It is showing "
+        f"{', '.join(sorted(f'{y}-{m:02d}' for y, m in shown)) or 'no month this code can read'}."
+        + (f" The screen is saved as {path}." if path else "")
+    )
+
+
 def open_calendar(
     target: date,
     serial: str | None = None,
@@ -527,22 +744,52 @@ def _pick_from_calendar(
     serial: str | None = None,
     dump_dir: Path | None = None,
 ) -> None:
-    """Open the month calendar and tap the target's day cell."""
+    """Open the month calendar, walk it to the target's month, tap its day cell."""
     root = open_calendar(target, serial=serial, dump_dir=dump_dir)
+    try:
+        _, height = screen_size(serial=serial)
+    except ADBError:
+        height = _screen_height(root)
+    root = page_to_month(target, root, serial=serial, height=height, dump_dir=dump_dir)
+
     label = _accessible_date_label(target)
-    day_node = find_element_by_text(root, label)
-    if day_node is None:
+    cell = next((node for when, node in _day_cells(root, height) if when == target), None)
+    if cell is None:
         path = _save_dump(
             ET.tostring(root, encoding="unicode"), dump_dir, "day-cell-not-found", target
         )
+        days = sorted(when.isoformat() for when, _ in _day_cells(root, height))
+        offered = f"It offers {days[0]} to {days[-1]}." if days else (
+            "It shows no day this code can read."
+        )
         raise RuntimeError(
-            f"Calendar day cell not found for {label!r}. The calendar does not "
-            "page across months yet, so the date must be in the month it opens to."
+            f"Calendar day cell not found for {label!r}. {offered}"
             + (f" The screen is saved as {path}." if path else "")
         )
     logger.info("Tapping calendar day: %r", label)
-    tap_element(day_node, serial=serial)
+    tap_element(cell, serial=serial)
     time.sleep(_TAP_WAIT_S)
+
+
+def _dismiss_calendar(serial: str | None = None, max_taps: int = 2) -> None:
+    """Close the month calendar if the day before left it open.
+
+    A day that failed part-way can leave the picker on screen, and its day
+    cells read as dates: the code that looks for the day bar would find one
+    among them and tap what it takes for the day arrows. Over a month-long run
+    that is the state the next day starts in, so it is cleared before anything
+    else is tapped or swiped.
+    """
+    root = dump_ui(serial=serial)
+    for _ in range(max_taps):
+        if not _calendar_is_open(root):
+            return
+        logger.info("A calendar is still open from the day before; closing it")
+        keyevent("KEYCODE_BACK", serial=serial)
+        time.sleep(_TAP_WAIT_S)
+        root = dump_ui(serial=serial)
+    if _calendar_is_open(root):
+        logger.warning("The calendar would not close; carrying on with it open")
 
 
 def go_to_date(
@@ -560,6 +807,7 @@ def go_to_date(
     Raises:
         RuntimeError: If the calendar cannot be opened or the day cell is missing.
     """
+    _dismiss_calendar(serial=serial)
     scroll_to_top(serial=serial)
     root = dump_ui(serial=serial)
     found = shown_date(root)

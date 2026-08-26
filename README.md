@@ -65,6 +65,9 @@ are handled by scrolling to the end and de-duplicating.
 # Scrape a date range from the phone into JSON
 python -m timeline_scraper scrape --start 2026-05-01 --end 2026-06-07 --out ~/timeline-exports/
 
+# Or a whole calendar month, named for the month it covers
+python -m timeline_scraper scrape --month 2026-07
+
 # Flatten the JSON into a CSV table
 python -m timeline_scraper flatten --in timeline.json --out timeline.csv
 
@@ -134,10 +137,10 @@ developed and verified **without a phone attached**.
 
 ## Roadmap
 
-- [ ] **M1** — Launch Maps and reach the Timeline screen
+- [x] **M1** — Launch Maps and reach the Timeline screen
 - [ ] **M2** — Capture one day losslessly to JSON (+ save location & conflict handling)
-- [ ] **M3** — Scrape the previous 7 days with crash-safe incremental saving
-- [ ] **M4** — Flatten 7 days to CSV
+- [x] **M3** — Scrape the previous 7 days with crash-safe incremental saving
+- [x] **M4** — Flatten 7 days to CSV
 - [ ] **M5** — Export a full previous month to JSON and CSV
 - [ ] **M6** — Polish: interactive prompts, logging, tests, docs
 

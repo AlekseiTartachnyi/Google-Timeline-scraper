@@ -73,6 +73,7 @@ timeline-scraper/
 ```
 # scrape: phone -> JSON
 python -m timeline_scraper scrape [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--out PATH] [--tz TZ]
+python -m timeline_scraper scrape --month YYYY-MM [--out PATH] [--tz TZ]
 
 # flatten: JSON -> CSV
 python -m timeline_scraper flatten --in timeline.json [--out timeline.csv]
@@ -204,8 +205,19 @@ Tests are not part of this milestone. Collecting the data comes first; the fixtu
 unit tests are M6 work.
 
 ### M5 — Previous month -> CSV
-- Scrape a full previous month and flatten to CSV.
-- Validate scroll/dedupe and date navigation at scale; tune throttling.
+- Scrape a full previous month and flatten to CSV. `--month YYYY-MM` names both ends of the
+  range, and the export is named for the month alone: `timeline_2026-Jul.json`.
+- The calendar walks across months. It opens on the month of the day already showing, so a
+  month collected after it ended has to be paged back before its first day can be tapped.
+  How this picker pages is not knowable from the source — it is a web page inside the
+  Timeline WebView — so the code tries a named control, a sideways swipe and a swipe along
+  the page in turn, keeps whichever moves the months toward the target, reverses one that
+  moves the wrong way, and says in the log which it was.
+- Validate scroll/dedupe and date navigation at scale; tune throttling. A day that fails no
+  longer poisons the ones after it: a calendar left open is closed before the next day is
+  opened, and two failures in a row restart Maps back onto the Timeline screen.
+- The report ends with what the whole run came to — days captured, days missing, trips and
+  miles — because a month is too long to add up by eye.
 - **Done when:** a full month exports correctly to JSON and CSV.
 
 ### M6 — Polish

@@ -5,6 +5,7 @@ names are English only, and the C library's month name follows whatever
 regional setting the laptop happens to carry.
 """
 
+from calendar import monthrange
 from datetime import date as date_type
 from datetime import datetime
 
@@ -57,3 +58,32 @@ def range_stem(first: date_type, last: date_type) -> str:
     and a second run of the same range replaces it rather than piling up.
     """
     return f"{_PREFIX}{stamp_date(first)} - {stamp_date(last)}"
+
+
+def month_stem(day: date_type) -> str:
+    """Return the file stem for a whole calendar month, e.g. 'timeline_2026-Jul'.
+
+    A month is named for the month and nothing else. The days it covers are the
+    whole of it, so spelling both ends out only makes the name longer than the
+    thing it names.
+    """
+    return f"{_PREFIX}{day.year}-{month(day)}"
+
+
+def is_whole_month(first: date_type, last: date_type) -> bool:
+    """Return True if the range is exactly one calendar month, end to end."""
+    if (first.year, first.month) != (last.year, last.month):
+        return False
+    return first.day == 1 and last.day == monthrange(first.year, first.month)[1]
+
+
+def run_stem(first: date_type, last: date_type) -> str:
+    """Return the settled file stem for a scraped range, whatever its shape.
+
+    The name is a function of the range alone, so the same days asked for twice
+    — `--month 2026-07` and the two dates spelled out — resume the same partial
+    file and replace the same export.
+    """
+    if is_whole_month(first, last):
+        return month_stem(first)
+    return range_stem(first, last)

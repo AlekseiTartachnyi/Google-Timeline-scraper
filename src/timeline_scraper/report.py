@@ -84,8 +84,63 @@ def render_day(day: DayResult) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _range_length(run: Run) -> int:
+    """Return how many days the range covers, or 0 if its ends do not parse."""
+    try:
+        first = date_type.fromisoformat(run.first_date)
+        last = date_type.fromisoformat(run.last_date)
+    except ValueError:
+        return 0
+    return (last - first).days + 1
+
+
+def render_summary(run: Run) -> str:
+    """Return what the whole run came to, read off the days it collected.
+
+    A month is too long to add up by eye, and the two numbers that decide
+    whether it can be filed — how much of it was captured and how many miles it
+    claims — are the ones nobody should have to scroll for. Days that failed
+    and days the phone never named are listed by date: they are the hand work
+    the run leaves behind.
+    """
+    days = run.days
+    failed = [d.date for d in days if d.status == STATUS_FAILED]
+    captured = [d for d in days if d.status != STATUS_FAILED]
+    driven = [d for d in captured if d.trips]
+    unconfirmed = [d.date for d in captured if not d.confirmed]
+    trips = [t for d in captured for t in d.trips]
+    miles = round(sum(t.distance_mi for t in trips if t.distance_mi is not None), 1)
+    unreported = sum(1 for t in trips if t.distance_mi is None)
+
+    counted = f"{len(days)} day(s)"
+    asked_for = _range_length(run)
+    if asked_for and asked_for != len(days):
+        counted += f" of the {asked_for} in the range"
+    lines = [
+        f"Range - {_header_date(run.first_date)} to {_header_date(run.last_date)}",
+        "",
+        f"{counted}: {len(driven)} with driving, "
+        f"{len(captured) - len(driven)} without, {len(failed)} not captured",
+    ]
+    total = f"{len(trips)} trip(s), {miles} mi total"
+    if unreported:
+        total += f" ({unreported} without a reported distance)"
+    lines.append(total)
+    if failed:
+        lines.append(f"Not captured, re-run to retry: {', '.join(failed)}")
+    if unconfirmed:
+        lines.append(f"The phone never showed the date for: {', '.join(unconfirmed)}")
+    return "\n".join(lines) + "\n"
+
+
 def render_run(run: Run) -> str:
-    """Return every day of the run, oldest first, cut apart by a rule."""
+    """Return every day of the run, oldest first, cut apart by a rule.
+
+    A run of more than one day ends with what the whole of it came to.
+    """
     if not run.days:
         return "Nothing was captured for this range.\n"
-    return f"\n{_SEPARATOR}\n\n".join(render_day(day) for day in run.days)
+    blocks = [render_day(day) for day in run.days]
+    if len(run.days) > 1:
+        blocks.append(render_summary(run))
+    return f"\n{_SEPARATOR}\n\n".join(blocks)

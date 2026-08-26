@@ -4,6 +4,7 @@ import argparse
 import logging
 import sys
 import time
+from calendar import monthrange
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from .model import (
     read_run_json,
     write_run_json,
 )
-from .naming import draft_stem, range_stem
+from .naming import draft_stem, run_stem
 from .nav import go_to_date, launch_maps, reach_timeline
 from .parse import build_day
 from .report import render_run
@@ -32,6 +33,10 @@ _M3_DAYS = 7
 _DEFAULT_OUT_DIR = Path("exports")
 # Let the day's list finish drawing after the calendar closes.
 _DAY_SETTLE_S = 1.5
+# How many days may fail back to back before Maps is restarted. One failure is
+# a day the phone was slow on; two in a row is a screen the run is lost on, and
+# a month has too many days left to spend them all failing the same way.
+_FAILURES_BEFORE_RESTART = 2
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -55,8 +60,29 @@ def _parse_date(value: str, flag: str) -> date:
         raise ValueError(f"--{flag} must be a date as YYYY-MM-DD, got {value!r}") from None
 
 
+def _parse_month(value: str) -> tuple[date, date]:
+    """Return the first and last day of a month written as YYYY-MM.
+
+    The last day comes from the calendar, not from a table of 30s and 31s:
+    February decides its own length and a month export must not stop a day
+    short of one.
+    """
+    try:
+        first = datetime.strptime(value, "%Y-%m").date()
+    except ValueError:
+        raise ValueError(f"--month must be a month as YYYY-MM, got {value!r}") from None
+    return first, first.replace(day=monthrange(first.year, first.month)[1])
+
+
 def _resolve_range(args: argparse.Namespace) -> tuple[date, date]:
     """Return the first and last day to scrape, oldest first."""
+    if args.month:
+        if args.start or args.end:
+            raise ValueError(
+                "--month already names both ends of the range; drop --start and --end"
+            )
+        return _parse_month(args.month)
+
     end = _parse_date(args.end, "end") if args.end else _M3_TEST_END
     if args.start:
         start = _parse_date(args.start, "start")
@@ -145,6 +171,23 @@ def _scrape_day(target: date, serial: str, dump_dir: Path) -> DayResult:
     return day_result(day, confirmed=confirmed)
 
 
+def _restart_maps(serial: str) -> bool:
+    """Put Maps back on the Timeline screen after a run loses it.
+
+    Returns False with the reason logged: the caller keeps going either way,
+    since the days left may still open, and a day that cannot be reached is
+    recorded as a failure rather than ending the run.
+    """
+    logger.warning("Restarting Google Maps to get back to a known screen")
+    try:
+        launch_maps(serial=serial)
+        reach_timeline(serial=serial)
+    except (ADBError, RuntimeError) as exc:
+        logger.error("Could not get back to the Timeline screen: %s", exc)
+        return False
+    return True
+
+
 def cmd_scrape(args: argparse.Namespace) -> int:
     """Capture a range of Timeline days: driving and missing travel, to JSON and a report."""
     _setup_logging(args.verbose)
@@ -159,8 +202,8 @@ def cmd_scrape(args: argparse.Namespace) -> int:
     out_dir = Path(args.out).expanduser() if args.out else _DEFAULT_OUT_DIR
     # The partial is named for the range, never for the collection time: a
     # resumed run has to find the file the interrupted one left behind.
-    partial_path = out_dir / f"{range_stem(start, end)}.partial.json"
-    stem = draft_stem(start, datetime.now()) if start == end else range_stem(start, end)
+    partial_path = out_dir / f"{run_stem(start, end)}.partial.json"
+    stem = draft_stem(start, datetime.now()) if start == end else run_stem(start, end)
     json_path = out_dir / f"{stem}.json"
     report_path = out_dir / f"{stem}.txt"
 
@@ -195,9 +238,10 @@ def cmd_scrape(args: argparse.Namespace) -> int:
             logger.error("%s", exc)
             return 1
 
+        in_a_row = 0
         for position, target in enumerate(pending, start=1):
             logger.info(
-                "Day %s (%d of %d to go)", target.isoformat(), position, len(pending)
+                "Day %s (%d of %d)", target.isoformat(), position, len(pending)
             )
             try:
                 result = _scrape_day(target, serial, out_dir)
@@ -217,8 +261,13 @@ def cmd_scrape(args: argparse.Namespace) -> int:
                         partial_path,
                     )
                     return 1
+                in_a_row += 1
+                if in_a_row >= _FAILURES_BEFORE_RESTART and position < len(pending):
+                    _restart_maps(serial)
+                    in_a_row = 0
                 continue
 
+            in_a_row = 0
             run.days.append(result)
             run.sort_days()
             write_run_json(run, partial_path)
@@ -371,6 +420,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--end",
         metavar="YYYY-MM-DD",
         help="Last day to scrape (default: the M3 test day, 2026-08-20)",
+    )
+    p_scrape.add_argument(
+        "--month",
+        metavar="YYYY-MM",
+        help="Scrape a whole calendar month, e.g. 2026-07 (instead of --start/--end)",
     )
     p_scrape.add_argument(
         "--out",

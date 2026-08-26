@@ -21,6 +21,18 @@ py -m timeline_scraper scrape
 With no flags this scrapes the seven days ending on the M3 test day, 2026-Aug-20. Another
 range is `--start YYYY-MM-DD --end YYYY-MM-DD`; a single day is the same date in both.
 
+A whole calendar month is one flag — it names both ends, so `--start` and `--end` are
+refused beside it:
+
+```
+py -m timeline_scraper scrape --month 2026-07
+```
+
+The month is walked day by day like any other range, so it resumes the same way: re-running
+the same command picks up where an interrupted run stopped and retries the days that failed.
+Google's calendar opens on the month of the day already showing, and the first day of the
+run is what walks it back to July.
+
 Turn the export into the mileage sheet. With no flags it takes the newest finished export
 in `exports/` and writes the CSV beside it, under the same name:
 
@@ -67,6 +79,19 @@ exports/
     timeline_2026-Aug-14 - 2026-Aug-20.txt     the same range as the numbered report
     timeline_2026-Aug-14 - 2026-Aug-20.csv     the mileage sheet, one row per drive
 ```
+
+A range that is exactly one calendar month, first day to last, is named for the month and
+nothing else — spelling both ends out only makes the name longer than the thing it names:
+
+```
+exports/
+    timeline_2026-Jul.json
+    timeline_2026-Jul.txt
+    timeline_2026-Jul.csv
+```
+
+The name comes from the range, not from the flag that asked for it, so `--month 2026-07`
+and the two dates spelled out resume the same partial file and replace the same export.
 
 The CSV is derived from the JSON and carries no collection time either: re-running `flatten`
 replaces it.
@@ -137,6 +162,15 @@ Not measured, therefore not to be asserted:
   rectangle has never been read off a dump.
 - whether a row's reported rectangle is wrong, stale, or correct-but-misused. This decides
   the whole fix and is still unknown.
+- **how the calendar moves between months.** Named arrows, a sideways page, a scrolling list
+  of months — none of it has been read off a dump, and the picker is part of the same web
+  page as the day list, so an Android date picker's behaviour says nothing about it. The
+  code therefore tries a named control, then a sideways swipe, then a swipe along the page,
+  and judges each by the months the screen shows afterwards: the one that moves the calendar
+  toward the target is kept for the rest of the walk, one that moves it the wrong way is
+  reversed, one that moves nothing is dropped. The log line `The calendar reached 2026-07 by
+  a sideways swipe` is what settles which it actually is; a failed walk saves the screen as
+  `dump_month-not-reached_...xml`.
 
 The one dump that answers both is the day screen's full tree next to the screenshot taken
 at the same moment. Ask for it rather than reasoning around it.
@@ -164,7 +198,7 @@ in every one. Do not raise it again.
 - [ ] M2 — Output path prompt, timestamped filename, overwrite/rename/cancel
 - [x] M3 — Scrape 7 days with crash-safe incremental save
 - [x] M4 — Flatten to CSV (no tests here — they are M6)
-- [ ] M5 — Full month export
+- [ ] M5 — Full month export (`--month`, the calendar walked across months; waiting on a July run)
 - [ ] M6 — Polish: interactive prompts, logging, tests
 
 ## How branches are named
@@ -181,7 +215,7 @@ push to a name the user has not been told about.
 
 ## Working branch
 
-`claude/timeline-csv-conversion-49zt4w`
+`claude/monthly-data-collection-csv-mvkplk`
 
 The branch name changes with every task. Use the branch named at the end of the reply,
 never a remembered one.
@@ -193,11 +227,11 @@ git fetch origin
 ```
 
 ```
-git checkout claude/timeline-csv-conversion-49zt4w
+git checkout claude/monthly-data-collection-csv-mvkplk
 ```
 
 ```
-git pull origin claude/timeline-csv-conversion-49zt4w
+git pull origin claude/monthly-data-collection-csv-mvkplk
 ```
 
 If local files look wrong (errors from code you did not write), throw them away:
@@ -207,7 +241,7 @@ git fetch origin
 ```
 
 ```
-git reset --hard origin/claude/timeline-csv-conversion-49zt4w
+git reset --hard origin/claude/monthly-data-collection-csv-mvkplk
 ```
 
 ## When to print the git commands
