@@ -63,11 +63,12 @@ are handled by scrolling to the end and de-duplicating.
 ## Usage
 
 ```bash
-# Scrape a date range from the phone into JSON
-python -m timeline_scraper scrape --start 2026-05-01 --end 2026-06-07 --out ~/timeline-exports/
+# The whole job in one command: a calendar month off the phone to JSON, the
+# numbered report, the mileage sheet, and its routed miles from the Routes API
+python -m timeline_scraper scrape --month 2026-07 --routes
 
-# Or a whole calendar month, named for the month it covers
-python -m timeline_scraper scrape --month 2026-07
+# Any other range, and without the billed route lookups
+python -m timeline_scraper scrape --start 2026-05-01 --end 2026-06-07 --out ~/timeline-exports/
 
 # Flatten the JSON into a CSV table
 python -m timeline_scraper flatten --in timeline.json --out timeline.csv

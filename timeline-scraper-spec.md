@@ -73,7 +73,7 @@ timeline-scraper/
 ```
 # scrape: phone -> JSON
 python -m timeline_scraper scrape [--start YYYY-MM-DD] [--end YYYY-MM-DD] [--out PATH] [--tz TZ]
-python -m timeline_scraper scrape --month YYYY-MM [--out PATH] [--tz TZ]
+python -m timeline_scraper scrape --month YYYY-MM [--routes] [--out PATH] [--tz TZ]
 
 # flatten: JSON -> CSV
 python -m timeline_scraper flatten --in timeline.json [--out timeline.csv]
@@ -207,6 +207,10 @@ unit tests are M6 work.
 ### M5 — Previous month -> CSV
 - Scrape a full previous month and flatten to CSV. `--month YYYY-MM` names both ends of the
   range, and the export is named for the month alone: `timeline_2026-Jul.json`.
+- One command carries the month all the way: the scrape writes the sheet itself when the days
+  are collected, and `--routes` fills its route columns in the same run. The API key is read
+  before the phone is driven, so a missing one costs seconds rather than a whole month.
+  `flatten` stays as the way to build the sheet again from an export that already exists.
 - The calendar walks across months. It opens on the month of the day already showing, so a
   month collected after it ended has to be paged back before its first day can be tapped.
   How this picker pages is not knowable from the source — it is a web page inside the

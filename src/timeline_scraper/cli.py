@@ -22,7 +22,7 @@ from .model import (
 from .naming import draft_stem, run_stem
 from .nav import go_to_date, launch_maps, reach_timeline
 from .parse import build_day
-from .routes import CACHE_NAME, KEY_ENV, open_lookup
+from .routes import CACHE_NAME, KEY_ENV, RouteLookup, open_lookup
 from .report import render_run
 
 logger = logging.getLogger(__name__)
@@ -207,6 +207,16 @@ def cmd_scrape(args: argparse.Namespace) -> int:
     stem = draft_stem(start, datetime.now()) if start == end else run_stem(start, end)
     json_path = out_dir / f"{stem}.json"
     report_path = out_dir / f"{stem}.txt"
+    csv_path = out_dir / f"{stem}.csv"
+
+    # The key is checked before the phone is touched. Finding out that the
+    # Routes API has nothing to authenticate with is worth two seconds at the
+    # start of a month-long run and worthless at the end of one.
+    lookup = None
+    if args.routes:
+        lookup = _open_routes(out_dir)
+        if lookup is None:
+            return 1
 
     logger.info(
         "Scraping %d day(s): %s to %s",
@@ -291,6 +301,9 @@ def cmd_scrape(args: argparse.Namespace) -> int:
     failed = [d.date for d in run.days if d.status == STATUS_FAILED]
     logger.info("Wrote %s (%d day(s), %d trip(s))", json_path, len(run.days), written)
     logger.info("Wrote %s", report_path)
+    # The sheet is written from the same run that is already in memory: the
+    # scrape is not finished until the thing the mileage is claimed off exists.
+    _write_sheet(run, csv_path, lookup)
     if failed:
         logger.warning("%d day(s) not captured: %s", len(failed), ", ".join(failed))
     unconfirmed = [d.date for d in run.days if d.status != STATUS_FAILED and not d.confirmed]
@@ -304,6 +317,52 @@ def cmd_scrape(args: argparse.Namespace) -> int:
     print(report)
 
     return 1 if len(failed) == len(run.days) else 0
+
+
+# ---------------------------------------------------------------------------
+# The mileage sheet — written by scrape, and again by flatten on demand
+# ---------------------------------------------------------------------------
+
+def _write_sheet(run: Run, csv_path: Path, lookup: RouteLookup | None) -> int:
+    """Write the mileage sheet and say what in it still needs a person. Returns rows.
+
+    Shared by both commands that produce a sheet, so a scrape and a later
+    flatten of the same export write the same file and warn about the same
+    rows.
+    """
+    kept, dropped = write_run_csv(run, csv_path, lookup)
+
+    for day_date, trip in dropped:
+        logger.warning(
+            "%s: dropped a %s mi %s row that is the same drive as the one on the "
+            "day before, shown twice because it crossed midnight",
+            day_date,
+            trip.distance_mi,
+            trip.mode,
+        )
+    incomplete = sum(1 for day_date, trip in kept if MISSING_INFO in row(day_date, trip))
+    if incomplete:
+        logger.warning(
+            "%d row(s) say '%s' in at least one cell and have to be completed by hand",
+            incomplete,
+            MISSING_INFO,
+        )
+    if lookup is not None:
+        logger.info("Routes API: %s", lookup.summary())
+
+    logger.info(
+        "Wrote %s (%d row(s), %s mi total)", csv_path, len(kept), total_miles(kept)
+    )
+    return len(kept)
+
+
+def _open_routes(out_dir: Path) -> RouteLookup | None:
+    """Return the Routes API lookup, or None with the reason already logged.
+
+    The cache lives beside the exports, never in the repo: it is keyed by the
+    addresses that were driven between, and those are personal.
+    """
+    return open_lookup(out_dir / CACHE_NAME)
 
 
 # ---------------------------------------------------------------------------
@@ -356,22 +415,10 @@ def cmd_flatten(args: argparse.Namespace) -> int:
 
     lookup = None
     if args.routes:
-        # The cache lives beside the exports, never in the repo: it is keyed by
-        # the addresses that were driven between, and those are personal.
-        lookup = open_lookup(csv_path.parent / CACHE_NAME)
+        lookup = _open_routes(csv_path.parent)
         if lookup is None:
             return 1
 
-    kept, dropped = write_run_csv(run, csv_path, lookup)
-
-    for day_date, trip in dropped:
-        logger.warning(
-            "%s: dropped a %s mi %s row that is the same drive as the one on the "
-            "day before, shown twice because it crossed midnight",
-            day_date,
-            trip.distance_mi,
-            trip.mode,
-        )
     failed = [d.date for d in run.days if d.status == STATUS_FAILED]
     if failed:
         logger.warning(
@@ -386,20 +433,8 @@ def cmd_flatten(args: argparse.Namespace) -> int:
             len(unconfirmed),
             ", ".join(unconfirmed),
         )
-    incomplete = sum(1 for day_date, trip in kept if MISSING_INFO in row(day_date, trip))
-    if incomplete:
-        logger.warning(
-            "%d row(s) say '%s' in at least one cell and have to be completed by hand",
-            incomplete,
-            MISSING_INFO,
-        )
 
-    if lookup is not None:
-        logger.info("Routes API: %s", lookup.summary())
-
-    logger.info(
-        "Wrote %s (%d row(s), %s mi total)", csv_path, len(kept), total_miles(kept)
-    )
+    _write_sheet(run, csv_path, lookup)
     return 0
 
 
@@ -504,6 +539,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--out",
         metavar="PATH",
         help="Output directory (default: exports/)",
+    )
+    p_scrape.add_argument(
+        "--routes",
+        action="store_true",
+        help=(
+            "Also fill the sheet's two route columns from the Google Routes API: "
+            "the miles the road network gives with tolls and without. The key is "
+            f"read from api-keys.txt (or {KEY_ENV}) and checked before the phone "
+            "is driven, so a missing one costs nothing"
+        ),
     )
     p_scrape.add_argument(
         "--tz",

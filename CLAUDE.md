@@ -11,51 +11,51 @@ Spec: `timeline-scraper-spec.md`
 
 One command per block — copy them one at a time.
 
-Scrape the day: driving and missing travel to JSON, plus the numbered report, which is
-also printed to the console.
+**One command does the whole job.** It walks the days on the phone, writes the JSON and the
+numbered report, then the mileage sheet, and fills the sheet's two route columns from the
+Google Routes API:
 
 ```
-py -m timeline_scraper scrape
+py -m timeline_scraper scrape --month 2026-07 --routes
 ```
 
-With no flags this scrapes the seven days ending on the M3 test day, 2026-Aug-20. Another
-range is `--start YYYY-MM-DD --end YYYY-MM-DD`; a single day is the same date in both.
+`--month` names both ends of the range, so `--start` and `--end` are refused beside it. With
+no flags at all the scrape covers the seven days ending on the M3 test day, 2026-Aug-20;
+another range is `--start YYYY-MM-DD --end YYYY-MM-DD`, and a single day is the same date in
+both. `--out PATH` puts the files somewhere other than `exports/`.
 
-A whole calendar month is one flag — it names both ends, so `--start` and `--end` are
-refused beside it:
+Drop `--routes` and everything else still happens — the JSON, the report and the CSV — with
+the two route columns left empty. Nothing is asked of Google and nothing is billed.
 
 ```
 py -m timeline_scraper scrape --month 2026-07
 ```
 
-The month is walked day by day like any other range, so it resumes the same way: re-running
-the same command picks up where an interrupted run stopped and retries the days that failed.
-Google's calendar opens on the month of the day already showing, and the first day of the
-run is what walks it back to July.
+The month is walked day by day, so it resumes the same way as any other range: re-running the
+same command picks up where an interrupted run stopped and retries the days that failed.
+Google's calendar opens on the month of the day already showing, and the first day of the run
+is what walks it back to July.
 
-Turn the export into the mileage sheet. With no flags it takes the newest finished export
-in `exports/` and writes the CSV beside it, under the same name:
+The first run with `--routes` and no key creates `api-keys.txt` in the project folder and
+stops. Open it, paste the key after `routes_api_key =`, save, run the command again. That is
+the whole setup, once — the file is gitignored, so it stays on the laptop and never reaches a
+commit. A `GOOGLE_MAPS_API_KEY` environment variable still works and is read second. The key
+is checked before the phone is driven, so a missing one costs seconds, not a whole run.
+
+Every new pair of addresses is one billed Routes API call per toll setting, so two per trip;
+the answers are cached in `exports/route-cache.json` and never asked for twice.
+
+Make the sheet again from an export that already exists, without touching the phone. With no
+flags it takes the newest finished export in `exports/` and writes the CSV beside it, under
+the same name:
 
 ```
 py -m timeline_scraper flatten
 ```
 
 Another file is `--in "exports/timeline_2026-Jul.json"` — quote the name if it has spaces in
-it, as a range export does — and `--out PATH` names the CSV.
-
-To fill the two route columns as well, add `--routes`:
-
-```
-py -m timeline_scraper flatten --routes
-```
-
-The first run with no key creates `api-keys.txt` in the project folder and stops. Open it,
-paste the key after `routes_api_key =`, save, run the command again. That is the whole
-setup, once — the file is gitignored, so it stays on the laptop and never reaches a commit.
-A `GOOGLE_MAPS_API_KEY` environment variable still works and is read second.
-
-Every new pair of addresses is one billed Routes API call per toll setting, so two per trip;
-the answers are cached in `exports/route-cache.json` and never asked for twice.
+it, as a range export does — and `--out PATH` names the CSV. `--routes` fills the two route
+columns, the same lookups the scrape does.
 
 Price a sheet again after editing it by hand. This reads the addresses out of the CSV, not
 out of the JSON, so corrected addresses and deleted rows are what gets sent:
@@ -70,13 +70,13 @@ row is asked about again rather than only the empty ones — the point of runnin
 the addresses changed, and a number left over from the address that used to be in that cell
 is worse than an empty cell. Pairs already in the cache cost nothing.
 
-The two commands do not share their cached answers, so `routes` over a sheet that
-`flatten --routes` already filled buys the month a second time even if nothing was edited.
-Measured: `flatten` sends the address alone, `1 A St, Austin TX`, while `routes` sends the
-whole cell, `Home, 1 A St, Austin TX` — different text, different cache key. Both are
-deliberate (a place name is a label this phone made up; an edited cell is the user's own
-text), so use one command per sheet: `flatten --routes` when the addresses are as scraped,
-`routes` after they have been corrected by hand.
+`routes` does not share its cached answers with the `--routes` flag. Measured: the flag
+sends the address alone, `1 A St, Austin TX`, while `routes` sends the whole cell,
+`Home, 1 A St, Austin TX` — different text, different cache key, so running `routes` over a
+sheet the flag already filled buys the month a second time even if nothing was edited. Both
+are deliberate (a place name is a label this phone made up; an edited cell is the user's own
+text), so: the flag while the addresses are as scraped, `routes` only after they have been
+corrected by hand.
 
 On Windows use `py`, not `python`. The `python` command is intercepted by a Windows
 App Execution Alias and redirects to the Microsoft Store.
@@ -133,8 +133,9 @@ and the two dates spelled out resume the same partial file and replace the same 
 data and lives with the exports, outside the repo. Deleting it costs money, not correctness:
 the next `--routes` run asks Google again.
 
-The CSV is derived from the JSON and carries no collection time either: re-running `flatten`
-replaces it.
+The CSV is derived from the JSON and carries no collection time either. The scrape writes it
+at the end of the run, and `flatten` writes it again from the same export; either way a
+re-run replaces it.
 
 A screen that defeats the navigation is saved next to the export as
 `dump_calendar-not-found_2026-Aug-15_11-22-33.xml` (or `dump_day-cell-not-found_...`),
@@ -238,7 +239,8 @@ in every one. Do not raise it again.
 - [ ] M2 — Output path prompt, timestamped filename, overwrite/rename/cancel
 - [x] M3 — Scrape 7 days with crash-safe incremental save
 - [x] M4 — Flatten to CSV (no tests here — they are M6)
-- [ ] M5 — Full month export (`--month`, the calendar walked across months; waiting on a July run)
+- [ ] M5 — Full month export (`--month`, the calendar walked across months, the sheet written
+      by the scrape itself; waiting on a July run)
 - [ ] M6 — Polish: interactive prompts, logging, tests
 
 ## How branches are named
