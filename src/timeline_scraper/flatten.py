@@ -12,6 +12,7 @@ guess, and nothing here invents a time or an address.
 
 import csv
 import logging
+from dataclasses import dataclass
 from datetime import date as date_type
 from datetime import timedelta
 from itertools import groupby
@@ -39,6 +40,9 @@ RouteMiles = tuple[float | None, float | None]
 # says about the same two addresses, with tolls allowed and with tolls avoided.
 # Three numbers that disagree are three numbers to look at — the sheet keeps all
 # of them and corrects none.
+TOLLS = "Tolls"
+NO_TOLLS = "No tolls"
+
 HEADER = (
     "date",
     "from_address",
@@ -46,10 +50,19 @@ HEADER = (
     "to_address",
     "arrival_time",
     "miles",
-    "route_mi_with_tolls",
-    "route_mi_no_tolls",
+    TOLLS,
+    NO_TOLLS,
     "mode",
 )
+
+# Header spellings recognised when an already-written sheet is read back, so a
+# file produced by an earlier version is filled in place rather than gaining a
+# second pair of columns.
+_TOLLS_HEADERS = {TOLLS.lower(), "route_mi_with_tolls", "with tolls", "with_tolls"}
+_NO_TOLLS_HEADERS = {NO_TOLLS.lower(), "route_mi_no_tolls", "no_tolls", "without tolls"}
+_FROM_HEADERS = {"from_address", "from address", "from"}
+_TO_HEADERS = {"to_address", "to address", "to"}
+_MODE_HEADERS = {"mode"}
 
 # What a trip's routed distance looks like before anything has been looked up:
 # tolls allowed, tolls avoided, both unknown.
@@ -208,3 +221,119 @@ def write_run_csv(
             writer.writerows(row(*triple) for triple in day_rows)
             writer.writerow([])
     return kept, dropped
+
+
+# ---------------------------------------------------------------------------
+# Filling the route columns of a sheet that already exists
+# ---------------------------------------------------------------------------
+#
+# The sheet is not only this program's output, it is also the copy a person
+# works on: rows get deleted, an address gets corrected, a place name gets
+# trimmed off the front of a cell. Asking Google again after that editing is a
+# second, separate job from building the sheet, so it is a command of its own
+# and it reads addresses out of the file rather than out of the JSON.
+
+
+@dataclass
+class SheetLayout:
+    """Where the columns this job cares about sit in a sheet that was read back."""
+
+    header_row: int
+    from_col: int
+    to_col: int
+    tolls_col: int
+    no_tolls_col: int
+    columns_added: bool
+
+
+def _index_of(header: list[str], names: set[str]) -> int | None:
+    """Return the column whose title is one of `names`, ignoring case and spacing."""
+    for position, title in enumerate(header):
+        if title.strip().lower() in names:
+            return position
+    return None
+
+
+def read_layout(rows: list[list[str]]) -> SheetLayout | None:
+    """Find the header row and the columns to work with, adding the two route
+    columns to every row if the sheet does not carry them yet.
+
+    The header is looked for rather than assumed to be the first line: a sheet
+    that has been opened, annotated and saved again may well have a note above
+    it. Without both address columns there is nothing to route between, and the
+    caller is told so instead of a guess being made.
+    """
+    for number, row in enumerate(rows):
+        from_col = _index_of(row, _FROM_HEADERS)
+        to_col = _index_of(row, _TO_HEADERS)
+        if from_col is None or to_col is None:
+            continue
+
+        tolls_col = _index_of(row, _TOLLS_HEADERS)
+        no_tolls_col = _index_of(row, _NO_TOLLS_HEADERS)
+        if tolls_col is not None and no_tolls_col is not None:
+            return SheetLayout(number, from_col, to_col, tolls_col, no_tolls_col, False)
+
+        # Not there yet: they go in front of `mode`, which stays last, or at the
+        # end of the line when the sheet has no mode column at all.
+        mode_col = _index_of(row, _MODE_HEADERS)
+        at = len(row) if mode_col is None else mode_col
+        for position, line in enumerate(rows):
+            if not line:  # the blank line between days stays blank
+                continue
+            while len(line) < at:
+                line.append("")
+            titles = [TOLLS, NO_TOLLS] if position == number else ["", ""]
+            line[at:at] = titles
+        return SheetLayout(number, from_col, to_col, at, at + 1, True)
+
+    return None
+
+
+def fill_sheet_routes(
+    path: Path, lookup: "RouteLookup", out_path: Path | None = None
+) -> tuple[int, int]:
+    """Fill the two route columns of an existing sheet. Returns (filled, skipped).
+
+    Every routable row is asked about again, not only the empty ones: the reason
+    to run this over an edited sheet is that the addresses changed, and a number
+    left over from the address that used to be in that cell would be worse than
+    no number at all. Repeats cost nothing — the cache answers them.
+
+    The file is replaced only once the whole sheet has been built, so an
+    interrupted run leaves the sheet it started with rather than half of one.
+    """
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = [list(row) for row in csv.reader(handle)]
+
+    layout = read_layout(rows)
+    if layout is None:
+        raise ValueError(
+            f"{path} has no 'from_address' and 'to_address' columns, so there is "
+            "nothing to route between"
+        )
+    if layout.columns_added:
+        logger.info("Sheet had no route columns; adding '%s' and '%s'", TOLLS, NO_TOLLS)
+
+    filled = skipped = 0
+    for row in rows[layout.header_row + 1:]:
+        if not row or not any(cell.strip() for cell in row):
+            continue
+        while len(row) <= layout.no_tolls_col:
+            row.append("")
+        origin = row[layout.from_col] if layout.from_col < len(row) else ""
+        destination = row[layout.to_col] if layout.to_col < len(row) else ""
+        with_tolls, no_tolls = lookup.for_cells(origin, destination)
+        row[layout.tolls_col] = "" if with_tolls is None else f"{with_tolls}"
+        row[layout.no_tolls_col] = "" if no_tolls is None else f"{no_tolls}"
+        if with_tolls is None and no_tolls is None:
+            skipped += 1
+        else:
+            filled += 1
+
+    target = out_path or path
+    temporary = target.with_suffix(target.suffix + ".writing")
+    with temporary.open("w", encoding="utf-8-sig", newline="") as handle:
+        csv.writer(handle).writerows(rows)
+    temporary.replace(target)
+    return filled, skipped

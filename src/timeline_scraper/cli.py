@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .adb import ADBError, devices, is_locked, wake_screen
 from .extract import collect_day
-from .flatten import MISSING_INFO, row, total_miles, write_run_csv
+from .flatten import MISSING_INFO, fill_sheet_routes, row, total_miles, write_run_csv
 from .model import (
     STATUS_FAILED,
     DayResult,
@@ -355,6 +355,67 @@ def cmd_flatten(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# routes
+# ---------------------------------------------------------------------------
+
+def _newest_sheet(out_dir: Path) -> Path | None:
+    """Return the most recently written mileage sheet in `out_dir`."""
+    sheets = list(out_dir.glob("timeline_*.csv"))
+    if not sheets:
+        return None
+    return max(sheets, key=lambda path: path.stat().st_mtime)
+
+
+def cmd_routes(args: argparse.Namespace) -> int:
+    """Fill the two route columns of a sheet that already exists.
+
+    The same lookups `flatten --routes` does, run over a written CSV instead of
+    the JSON, so a sheet whose addresses have been corrected or thinned out by
+    hand can be priced again without scraping or flattening anything.
+    """
+    _setup_logging(args.verbose)
+
+    if args.input:
+        csv_path = Path(args.input).expanduser()
+        if not csv_path.exists():
+            logger.error("No such file: %s", csv_path)
+            return 1
+    else:
+        found = _newest_sheet(_DEFAULT_OUT_DIR)
+        if found is None:
+            logger.error(
+                "No sheet found in %s/. Name the file with --in, or run flatten first.",
+                _DEFAULT_OUT_DIR,
+            )
+            return 1
+        csv_path = found
+        logger.info("Using the newest sheet: %s", csv_path)
+
+    out_path = Path(args.out).expanduser() if args.out else None
+    lookup = open_lookup(csv_path.parent / CACHE_NAME)
+    if lookup is None:
+        return 1
+
+    try:
+        filled, skipped = fill_sheet_routes(csv_path, lookup, out_path)
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 1
+    except OSError as exc:
+        logger.error("Could not write the sheet: %s", exc)
+        return 1
+
+    logger.info("Routes API: %s", lookup.summary())
+    logger.info(
+        "Wrote %s (%d row(s) with routed miles, %d without an address to route from)",
+        out_path or csv_path,
+        filled,
+        skipped,
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # parser
 # ---------------------------------------------------------------------------
 
@@ -422,6 +483,27 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_flatten.set_defaults(func=cmd_flatten)
+
+    # -- routes ---------------------------------------------------------------
+    p_routes = sub.add_parser(
+        "routes",
+        help=(
+            "Fill the Tolls / No tolls columns of a sheet that already exists, "
+            "reading the addresses out of the CSV"
+        ),
+    )
+    p_routes.add_argument(
+        "--in",
+        dest="input",
+        metavar="PATH",
+        help="The sheet to fill (default: the newest CSV in exports/)",
+    )
+    p_routes.add_argument(
+        "--out",
+        metavar="PATH",
+        help="Write the result here instead of back into the same file",
+    )
+    p_routes.set_defaults(func=cmd_routes)
 
     return parser
 

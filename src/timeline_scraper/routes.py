@@ -81,6 +81,11 @@ TIMEOUT_S = 20
 # wrong character in the key means several hundred pointless calls.
 GIVE_UP_AFTER = 3
 
+# What the sheet writes where nothing was known. Repeated here rather than
+# imported from flatten, which imports this module.
+_MISSING_VISIT = "Missing visit"
+_MISSING_INFO = "missing information"
+
 CACHE_NAME = "route-cache.json"
 CACHE_VERSION = 1
 
@@ -152,6 +157,23 @@ def write_key_template(path: Path) -> bool:
         logger.error("Could not create %s: %s", path, exc)
         return False
     return True
+
+
+def query_from_cell(text: str | None) -> str | None:
+    """Return what to ask the API for one address cell of a written sheet.
+
+    The sheet is the copy a person edits: rows get deleted, an address gets
+    corrected by hand, a place name gets trimmed off. Whatever is left in the
+    cell is what gets sent — this is the user's own text and it is not second-
+    guessed. The words the sheet uses for "nothing was known" are the one thing
+    that is never sent anywhere.
+    """
+    if text is None:
+        return None
+    text = text.strip()
+    if not text or text in (_MISSING_VISIT, _MISSING_INFO):
+        return None
+    return text
 
 
 def endpoint_query(address: str | None, missing: bool) -> str | None:
@@ -231,6 +253,19 @@ class RouteLookup:
         self.cache_dirty = False
 
     # -- lookups -------------------------------------------------------------
+
+    def for_cells(self, origin_cell: str | None, destination_cell: str | None
+                  ) -> tuple[float | None, float | None]:
+        """Return (miles allowing tolls, miles avoiding tolls) for two sheet cells."""
+        origin = query_from_cell(origin_cell)
+        destination = query_from_cell(destination_cell)
+        if origin is None or destination is None:
+            self.skipped += 1
+            return None, None
+        return (
+            self.miles(origin, destination, avoid_tolls=False),
+            self.miles(origin, destination, avoid_tolls=True),
+        )
 
     def for_trip(self, trip: Trip) -> tuple[float | None, float | None]:
         """Return (miles allowing tolls, miles avoiding tolls) for one trip.

@@ -189,8 +189,8 @@ Dates are **hardcoded during M1–M5 for testing**; interactive prompts are wire
 
 ### M4 — 7 days -> CSV
 - `flatten` command turns the 7-day JSON into the mileage sheet:
-  `date, from_address, departure_time, to_address, arrival_time, miles, route_mi_with_tolls,
-  route_mi_no_tolls, mode`. Nine columns, one row per trip, a blank line between days — narrower than the lossless schema in §7 on
+  `date, from_address, departure_time, to_address, arrival_time, miles, Tolls, No tolls,
+  mode`. Nine columns, one row per trip, a blank line between days — narrower than the lossless schema in §7 on
   purpose. The JSON stays the lossless record; the sheet is what a mileage claim is read off,
   and every column it does not need is a column somebody has to skip over on every row.
   `category` is not written yet: labelling comes back with the interactive work in M6.
@@ -246,8 +246,8 @@ unit tests are M6 work.
    all versus reviewing flagged trips by hand.
    **Answered.** The provider is the Google Routes API (`computeRoutes`): the sheet is read
    against what Google Maps shows, and a second road network would be a third opinion nobody
-   asked for. `flatten --routes` fills two columns per trip — `route_mi_with_tolls` from the
-   default route and `route_mi_no_tolls` from the same request with
+   asked for. `flatten --routes` fills two columns per trip — `Tolls` from the
+   default route and `No tolls` from the same request with
    `routeModifiers.avoidTolls`, since the road a toll buys is a different road and its length
    differs. The two live in the CSV only; the JSON keeps `distance_mi` exactly as the screen
    reported it, so the lossless record stays a record of the phone. Cost is held down three
@@ -256,4 +256,10 @@ unit tests are M6 work.
    does not depend on the hour), and every answer is cached by (origin, destination, tolls) in
    `exports/route-cache.json`, so a repeated commute is paid for once and a re-run of `flatten`
    costs nothing. A trip missing an address on either end is skipped, never guessed at.
+   The same lookups also run as their own command, `routes --in <sheet.csv>`, over a sheet
+   that has already been written: the addresses come out of the CSV rather than the JSON, so
+   a sheet whose rows have been thinned out and whose addresses have been corrected by hand
+   can be priced again without scraping or flattening. Every routable row is re-asked, not
+   only the empty ones — the reason to run it is that the addresses changed, and a number
+   left over from the address that used to be in that cell is worse than an empty cell.
    Still open: what size of gap is worth reviewing, and whether the report should flag it.

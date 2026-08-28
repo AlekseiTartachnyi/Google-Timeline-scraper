@@ -42,6 +42,19 @@ A `GOOGLE_MAPS_API_KEY` environment variable still works and is read second.
 Every new pair of addresses is one billed Routes API call per toll setting, so two per trip;
 the answers are cached in `exports/route-cache.json` and never asked for twice.
 
+Price a sheet again after editing it by hand. This reads the addresses out of the CSV, not
+out of the JSON, so corrected addresses and deleted rows are what gets sent:
+
+```
+py -m timeline_scraper routes --in "exports/timeline_2026-Aug-14 - 2026-Aug-20.csv"
+```
+
+With no `--in` it takes the newest CSV in `exports/`. It writes back into the same file;
+`--out PATH` puts the result somewhere else and leaves the original alone. Every routable
+row is asked about again rather than only the empty ones — the point of running it is that
+the addresses changed, and a number left over from the address that used to be in that cell
+is worse than an empty cell. Pairs already in the cache cost nothing.
+
 Another file is `--in "exports/timeline_2026-Aug-14 - 2026-Aug-20.json"` — the quotes matter,
 the name has spaces in it — and `--out PATH` names the CSV.
 
@@ -307,7 +320,7 @@ Rules that must not be relaxed:
 
 ```
 date, from_address, departure_time, to_address, arrival_time,
-miles, route_mi_with_tolls, route_mi_no_tolls, mode
+miles, Tolls, No tolls, mode
 ```
 
 - `mode` is last, past the miles: `Driving`, or `Missing travel` where Google recorded
@@ -320,10 +333,9 @@ miles, route_mi_with_tolls, route_mi_no_tolls, mode
   which stays empty so the column can still be added up — the mode beside it already says
   why the number is not there.
 - Each day is followed by a blank line, so the days stay apart down the screen.
-- `miles` is Timeline's own number — the length of the recorded GPS track. The two
-  `route_mi_*` columns are what the road network says between the same two addresses,
-  with tolls allowed and with tolls avoided; they stay empty unless `flatten --routes`
-  is run with a key. Both numbers are kept and neither is corrected into the other
+- `miles` is Timeline's own number — the length of the recorded GPS track. `Tolls` and
+  `No tolls` are what the road network says between the same two addresses, with tolls
+  allowed and with tolls avoided; they stay empty until the routes are looked up. Both numbers are kept and neither is corrected into the other
   (spec §9.5): a detour is legitimate, so a track longer than the route is a row to
   review, not an error.
 - **A drive across midnight is written once.** Google lists it on both days with the same
@@ -342,14 +354,14 @@ miles, route_mi_with_tolls, route_mi_no_tolls, mode
 - Do not use `ZoneInfo` without adding `tzdata` to pyproject.toml dependencies
   (Windows has no built-in timezone database)
 - Test fixtures must be anonymized
-- No autonomous agents — two deterministic commands only: `scrape` and `flatten`
+- No autonomous agents — three deterministic commands only: `scrape`, `flatten`, `routes`
 - Never suggest the Google Timeline / Takeout export as a data source
 
 ## Project structure
 
 ```
 src/timeline_scraper/
-    cli.py      — argparse entrypoint (scrape / flatten)
+    cli.py      — argparse entrypoint (scrape / flatten / routes)
     adb.py      — adb wrappers: devices, shell, tap, swipe, keyevent, dump_ui, screencap
     nav.py      — launch Maps, navigate to Timeline by accessibility tree text
     model.py    — Visit / Trip / Day dataclasses + JSON serialization
@@ -357,7 +369,7 @@ src/timeline_scraper/
     parse.py    — descriptions -> visits and trips, endpoint linking
     naming.py   — export file names and the report's date header, English month table
     report.py   — a day rendered as the numbered list checked by eye
-    flatten.py  — JSON -> the mileage CSV, one row per drive
+    flatten.py  — JSON -> the mileage CSV, one row per drive; route columns of a written sheet
     routes.py   — routed miles between two addresses, Google Routes API + cache
 ```
 
