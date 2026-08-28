@@ -34,6 +34,17 @@ def stamp_date(day: date_type) -> str:
     return f"{day.year}-{month(day)}-{day.day:02d}"
 
 
+def sheet_date(day: date_type) -> str:
+    """Return a date as the mileage sheet writes it: '2026, Aug 28'.
+
+    The year first and the month by name: the sheet is read by a person and
+    filed by year, and 07/08 says nothing about which of the two is the month
+    to a reader on the wrong side of the Atlantic. The day is padded so the
+    column stays a column.
+    """
+    return f"{day.year}, {month(day)} {day.day:02d}"
+
+
 def header_date(day: date_type) -> str:
     """Return a date as the report's header reads it: '2026, Aug, 20, Thu'."""
     return f"{day.year}, {month(day)}, {day.day:02d}, {weekday(day)}"

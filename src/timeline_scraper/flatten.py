@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .model import Run, Trip
+from .naming import sheet_date, weekday
 
 if TYPE_CHECKING:  # the sheet is written with or without the network module
     from .routes import RouteLookup
@@ -45,6 +46,7 @@ NO_TOLLS = "No tolls"
 
 HEADER = (
     "date",
+    "weekday",
     "from_address",
     "departure_time",
     "to_address",
@@ -98,6 +100,22 @@ def endpoint(place: str | None, address: str | None, missing: bool) -> str:
     return ", ".join(part for part in (place, address) if part) or MISSING_INFO
 
 
+def day_columns(day_date: str) -> tuple[str, str]:
+    """Return the two date columns for a day: '2026, Aug 28' and 'Fri'.
+
+    The weekday is written out because a mileage record is argued about in
+    weekdays — a Saturday drive to a job site is the one that gets asked about,
+    and counting them off a column of dates is work nobody should repeat. A
+    date this code cannot read is written through as it stands with no weekday
+    beside it, rather than a guessed one.
+    """
+    try:
+        parsed = date_type.fromisoformat(day_date)
+    except ValueError:
+        return day_date, ""
+    return sheet_date(parsed), weekday(parsed)
+
+
 def row(day_date: str, trip: Trip, route: RouteMiles = NO_ROUTE) -> list[str]:
     """Return one trip as its row of the sheet.
 
@@ -108,8 +126,10 @@ def row(day_date: str, trip: Trip, route: RouteMiles = NO_ROUTE) -> list[str]:
     lookup had no address to work from.
     """
     with_tolls, no_tolls = route
+    day, day_name = day_columns(day_date)
     return [
-        day_date,
+        day,
+        day_name,
         endpoint(trip.from_place, trip.from_address, trip.from_missing),
         trip.start_time or MISSING_INFO,
         endpoint(trip.to_place, trip.to_address, trip.to_missing),

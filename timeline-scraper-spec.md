@@ -190,11 +190,13 @@ Dates are **hardcoded during M1–M5 for testing**; interactive prompts are wire
 
 ### M4 — 7 days -> CSV
 - `flatten` command turns the 7-day JSON into the mileage sheet:
-  `date, from_address, departure_time, to_address, arrival_time, miles, Tolls, No tolls,
-  mode`. Nine columns, one row per trip, a blank line between days — narrower than the lossless schema in §7 on
+  `date, weekday, from_address, departure_time, to_address, arrival_time, miles, Tolls,
+  No tolls, mode`. Ten columns, one row per trip, a blank line between days — narrower than the lossless schema in §7 on
   purpose. The JSON stays the lossless record; the sheet is what a mileage claim is read off,
   and every column it does not need is a column somebody has to skip over on every row.
   `category` is not written yet: labelling comes back with the interactive work in M6.
+- The date is written for a reader, `2026, Aug 28`, with the three-letter weekday beside it:
+  a mileage claim is questioned by the day of the week it fell on.
 - A cell the scrape could not fill reads `missing information`, so a row needing hand work
   cannot be mistaken for a complete one. `miles` is the exception and stays empty, to keep the
   column summable; `mode` says whether the row is a `Driving` trip or a `Missing travel` gap.

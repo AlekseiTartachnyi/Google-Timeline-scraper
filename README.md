@@ -104,14 +104,16 @@ segment keeps its complete `raw_text` alongside best-effort fields:
 }
 ```
 
-**CSV** is the mileage sheet: one row per trip, nine columns, nothing to skip over, and a
+**CSV** is the mileage sheet: one row per trip, ten columns, nothing to skip over, and a
 blank line between days.
 
 ```
-date, from_address, departure_time, to_address, arrival_time,
+date, weekday, from_address, departure_time, to_address, arrival_time,
 miles, Tolls, No tolls, mode
 ```
 
+The date reads `2026, Aug 28` and the weekday beside it `Fri`: the sheet is read by a person
+and filed by year, and the day of the week is what a mileage claim gets questioned on.
 `mode` sits past the miles and reads `Driving`, or `Missing travel` where Maps recorded
 travel it could not describe — those rows stay in, so a hole in the record is visible in the
 day it belongs to. A field the scrape could not fill says `missing information` rather than

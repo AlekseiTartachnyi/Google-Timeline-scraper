@@ -360,13 +360,20 @@ Rules that must not be relaxed:
 
 ## The mileage sheet
 
-`flatten` writes nine columns and nothing else:
+The sheet has ten columns and nothing else — written by the scrape at the end of a run, and
+again by `flatten` from an export that already exists:
 
 ```
-date, from_address, departure_time, to_address, arrival_time,
+date, weekday, from_address, departure_time, to_address, arrival_time,
 miles, Tolls, No tolls, mode
 ```
 
+- `date` reads `2026, Aug 28`: the year first, the month by name, the day padded so the
+  column stays a column. `07/08` does not say which half is the month, and this sheet is
+  filed by year.
+- `weekday` is the three-letter English day, `Fri`. A mileage record is argued about in
+  weekdays — the Saturday drive to a job site is the one that gets asked about — and
+  counting them off a column of dates is work nobody should have to repeat.
 - `mode` is last, past the miles: `Driving`, or `Missing travel` where Google recorded
   travel it could not describe. Those rows stay in the sheet, in the day they belong to —
   a visible hole is what catches a drive Maps failed to log.
