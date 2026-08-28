@@ -40,8 +40,43 @@ in `exports/` and writes the CSV beside it, under the same name:
 py -m timeline_scraper flatten
 ```
 
-Another file is `--in "exports/timeline_2026-Aug-14 - 2026-Aug-20.json"` — the quotes matter,
-the name has spaces in it — and `--out PATH` names the CSV.
+Another file is `--in "exports/timeline_2026-Jul.json"` — quote the name if it has spaces in
+it, as a range export does — and `--out PATH` names the CSV.
+
+To fill the two route columns as well, add `--routes`:
+
+```
+py -m timeline_scraper flatten --routes
+```
+
+The first run with no key creates `api-keys.txt` in the project folder and stops. Open it,
+paste the key after `routes_api_key =`, save, run the command again. That is the whole
+setup, once — the file is gitignored, so it stays on the laptop and never reaches a commit.
+A `GOOGLE_MAPS_API_KEY` environment variable still works and is read second.
+
+Every new pair of addresses is one billed Routes API call per toll setting, so two per trip;
+the answers are cached in `exports/route-cache.json` and never asked for twice.
+
+Price a sheet again after editing it by hand. This reads the addresses out of the CSV, not
+out of the JSON, so corrected addresses and deleted rows are what gets sent:
+
+```
+py -m timeline_scraper routes --in "exports/timeline_2026-Aug-14 - 2026-Aug-20.csv"
+```
+
+With no `--in` it takes the newest CSV in `exports/`. It writes back into the same file;
+`--out PATH` puts the result somewhere else and leaves the original alone. Every routable
+row is asked about again rather than only the empty ones — the point of running it is that
+the addresses changed, and a number left over from the address that used to be in that cell
+is worse than an empty cell. Pairs already in the cache cost nothing.
+
+The two commands do not share their cached answers, so `routes` over a sheet that
+`flatten --routes` already filled buys the month a second time even if nothing was edited.
+Measured: `flatten` sends the address alone, `1 A St, Austin TX`, while `routes` sends the
+whole cell, `Home, 1 A St, Austin TX` — different text, different cache key. Both are
+deliberate (a place name is a label this phone made up; an edited cell is the user's own
+text), so use one command per sheet: `flatten --routes` when the addresses are as scraped,
+`routes` after they have been corrected by hand.
 
 On Windows use `py`, not `python`. The `python` command is intercepted by a Windows
 App Execution Alias and redirects to the Microsoft Store.
@@ -78,6 +113,7 @@ exports/
     timeline_2026-Aug-14 - 2026-Aug-20.json    every day of the range, in date order
     timeline_2026-Aug-14 - 2026-Aug-20.txt     the same range as the numbered report
     timeline_2026-Aug-14 - 2026-Aug-20.csv     the mileage sheet, one row per drive
+    route-cache.json                           routed miles already paid for
 ```
 
 A range that is exactly one calendar month, first day to last, is named for the month and
@@ -92,6 +128,10 @@ exports/
 
 The name comes from the range, not from the flag that asked for it, so `--month 2026-07`
 and the two dates spelled out resume the same partial file and replace the same export.
+
+`route-cache.json` is keyed by the addresses that were driven between, so it is personal
+data and lives with the exports, outside the repo. Deleting it costs money, not correctness:
+the next `--routes` run asks Google again.
 
 The CSV is derived from the JSON and carries no collection time either: re-running `flatten`
 replaces it.
@@ -318,10 +358,11 @@ Rules that must not be relaxed:
 
 ## The mileage sheet
 
-`flatten` writes seven columns and nothing else:
+`flatten` writes nine columns and nothing else:
 
 ```
-date, from_address, departure_time, to_address, arrival_time, miles, mode
+date, from_address, departure_time, to_address, arrival_time,
+miles, Tolls, No tolls, mode
 ```
 
 - `mode` is last, past the miles: `Driving`, or `Missing travel` where Google recorded
@@ -334,6 +375,11 @@ date, from_address, departure_time, to_address, arrival_time, miles, mode
   which stays empty so the column can still be added up — the mode beside it already says
   why the number is not there.
 - Each day is followed by a blank line, so the days stay apart down the screen.
+- `miles` is Timeline's own number — the length of the recorded GPS track. `Tolls` and
+  `No tolls` are what the road network says between the same two addresses, with tolls
+  allowed and with tolls avoided; they stay empty until the routes are looked up. Both numbers are kept and neither is corrected into the other
+  (spec §9.5): a detour is legitimate, so a track longer than the route is a row to
+  review, not an error.
 - **A drive across midnight is written once.** Google lists it on both days with the same
   distance and no clock strings at all, which would claim the miles twice; the copy on the
   second day is dropped and named in the log. Its times and endpoints still come out as
@@ -344,18 +390,20 @@ date, from_address, departure_time, to_address, arrival_time, miles, mode
 
 - English only — no Russian in code, comments, commits, or docs
 - No personal data committed — exports live outside the repo
+- The API key lives in `api-keys.txt` in the project folder, gitignored. Never in the
+  source, never in a commit, never typed into a chat
 - Use `py` not `python` on Windows
 - Do not use `ZoneInfo` without adding `tzdata` to pyproject.toml dependencies
   (Windows has no built-in timezone database)
 - Test fixtures must be anonymized
-- No autonomous agents — two deterministic commands only: `scrape` and `flatten`
+- No autonomous agents — three deterministic commands only: `scrape`, `flatten`, `routes`
 - Never suggest the Google Timeline / Takeout export as a data source
 
 ## Project structure
 
 ```
 src/timeline_scraper/
-    cli.py      — argparse entrypoint (scrape / flatten)
+    cli.py      — argparse entrypoint (scrape / flatten / routes)
     adb.py      — adb wrappers: devices, shell, tap, swipe, keyevent, dump_ui, screencap
     nav.py      — launch Maps, navigate to Timeline by accessibility tree text
     model.py    — Visit / Trip / Day dataclasses + JSON serialization
@@ -363,7 +411,8 @@ src/timeline_scraper/
     parse.py    — descriptions -> visits and trips, endpoint linking
     naming.py   — export file names and the report's date header, English month table
     report.py   — a day rendered as the numbered list checked by eye
-    flatten.py  — JSON -> the mileage CSV, one row per drive
+    flatten.py  — JSON -> the mileage CSV, one row per drive; route columns of a written sheet
+    routes.py   — routed miles between two addresses, Google Routes API + cache
 ```
 
 ## Before making any changes

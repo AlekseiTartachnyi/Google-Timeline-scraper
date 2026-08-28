@@ -29,6 +29,7 @@ Two deterministic commands — no autonomous agents:
 |-----------|-------------|------------------------------------------------------|
 | `scrape`  | phone → JSON | Drives the phone, walks the date range, captures every visible block losslessly |
 | `flatten` | JSON → CSV   | Flattens the JSON into a labeling-ready table         |
+| `routes`  | CSV → CSV    | Fills the Tolls / No tolls columns of an existing sheet |
 
 Capture is **lossless first**: the accessibility tree (`uiautomator dump`) is the primary
 source, with an **OCR fallback** (Tesseract) for any text the tree doesn't expose. Long days
@@ -102,11 +103,12 @@ segment keeps its complete `raw_text` alongside best-effort fields:
 }
 ```
 
-**CSV** is the mileage sheet: one row per trip, seven columns, nothing to skip over, and a
+**CSV** is the mileage sheet: one row per trip, nine columns, nothing to skip over, and a
 blank line between days.
 
 ```
-date, from_address, departure_time, to_address, arrival_time, miles, mode
+date, from_address, departure_time, to_address, arrival_time,
+miles, Tolls, No tolls, mode
 ```
 
 `mode` sits past the miles and reads `Driving`, or `Missing travel` where Maps recorded
@@ -114,6 +116,31 @@ travel it could not describe — those rows stay in, so a hole in the record is 
 day it belongs to. A field the scrape could not fill says `missing information` rather than
 being guessed or left blank, and a drive that crossed midnight is written once, on the day it
 started, so its distance is not claimed on both days.
+
+`miles` is what Timeline showed: the length of the *recorded GPS track*, which wanders where
+the signal is poor. `Tolls` and `No tolls` are what the road network says about the same two
+addresses — one allowing tolls, one avoiding them — and they are filled only when the routes
+are looked up with a Google Maps Platform API key:
+
+```
+# while building the sheet
+python -m timeline_scraper flatten --routes
+
+# or later, over a sheet whose addresses have been edited by hand
+python -m timeline_scraper routes --in "exports/timeline_2026-Aug-14 - 2026-Aug-20.csv"
+```
+
+The second form reads the addresses out of the CSV, so rows deleted and addresses corrected
+by hand are what gets priced. It writes back into the same file unless `--out` names another.
+
+The first run without a key creates `api-keys.txt` in the project folder and stops. Paste
+the key after `routes_api_key =`, save, run again. The file is gitignored and never leaves
+the machine; a `GOOGLE_MAPS_API_KEY` environment variable is read second if it is set.
+
+Neither number is corrected into the other: a detour is legitimate, so a track longer than
+the route is a row to look at, not an error to fix. Answers are cached per address pair in
+`exports/route-cache.json`, so a repeated commute is a billed lookup once and a re-run of
+`flatten` costs nothing.
 
 ## Project structure
 
@@ -128,6 +155,7 @@ timeline-scraper/
     ocr.py        # screenshot -> Tesseract fallback
     model.py      # data model + JSON (de)serialization
     flatten.py    # JSON -> CSV
+    routes.py     # routed miles from the Google Routes API
   tests/          # unit tests on parse/flatten against fixture dumps
   docs/           # spec
 ```

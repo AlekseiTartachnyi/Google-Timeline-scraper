@@ -9,6 +9,10 @@ build/
 .coverage
 htmlcov/
 
+# Secrets — never commit. The key file is created by `flatten --routes`.
+api-keys.txt
+.env
+
 # Personal data — never commit
 exports/
 *.json
