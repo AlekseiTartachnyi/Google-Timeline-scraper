@@ -13,8 +13,11 @@ that avoids them. The miles differ, which is the point of having both columns.
 
 What this needs to run:
 
-  * a Google Maps Platform API key with the Routes API enabled, in the
-    environment variable GOOGLE_MAPS_API_KEY;
+  * a Google Maps Platform API key with the Routes API enabled, written once
+    into `api-keys.txt` in the project folder. That file is gitignored and never
+    leaves the laptop; the key is typed once and never again. An environment
+    variable named GOOGLE_MAPS_API_KEY still works and is looked at second, for
+    a machine where a file is the wrong place.
   * an address on both ends of the trip. A trip whose endpoint the scrape could
     not fill is left alone — nothing here guesses at a location.
 
@@ -37,6 +40,33 @@ logger = logging.getLogger(__name__)
 ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes"
 KEY_ENV = "GOOGLE_MAPS_API_KEY"
 
+# Where the key is kept: one line in a plain text file in the project folder,
+# listed in .gitignore. Retyping a forty-character key into the terminal before
+# every run is how a key ends up pasted somewhere it should never be.
+KEY_FILE_NAME = "api-keys.txt"
+# The name on the left of the `=`. Read without regard to case or spacing.
+KEY_NAME = "routes_api_key"
+
+# Written for the user to fill in when the file is not there yet. The comment
+# lines are the whole instruction: the file has to explain itself, because it is
+# read once every two years.
+KEY_FILE_TEMPLATE = """\
+# Keys for this project. This file stays on this computer.
+#
+# It is listed in .gitignore, so `git` never uploads it and nobody can download
+# it from GitHub. Do not remove that line, and do not paste the key anywhere
+# else — not into a chat, not into a commit.
+#
+# Paste the key after the `=` sign, save the file, and run the command again:
+#
+#     py -m timeline_scraper flatten --routes
+#
+# The key is the string starting with AIza from the Google Cloud console, under
+# APIs & Services -> Credentials -> Show key.
+
+routes_api_key =
+"""
+
 # Only the distance is asked for. The field mask is not optional on this API,
 # and a narrow one is also what keeps the call in the cheapest billing tier.
 FIELD_MASK = "routes.distanceMeters"
@@ -55,10 +85,73 @@ CACHE_NAME = "route-cache.json"
 CACHE_VERSION = 1
 
 
-def api_key() -> str | None:
-    """Return the API key from the environment, or None if it is not set."""
+def key_file_candidates() -> list[Path]:
+    """Return where the key file is looked for, in order.
+
+    The working directory first, because that is the project folder in every
+    documented way of running this. The repo root second, so a run started from
+    somewhere else still finds the file the user already filled in.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    found: list[Path] = []
+    for path in (Path.cwd() / KEY_FILE_NAME, repo_root / KEY_FILE_NAME):
+        if path not in found:
+            found.append(path)
+    return found
+
+
+def read_key_file(path: Path) -> str | None:
+    """Return the key written in `path`, or None if there is none to read.
+
+    The format is one `name = value` per line, `#` starts a comment. Quotes
+    around the value are stripped: a key pasted with them is the likeliest
+    mistake, and failing on it would send the user back to the console for no
+    reason.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Cannot read %s: %s", path, exc)
+        return None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        if name.strip().lower().replace("-", "_") != KEY_NAME:
+            continue
+        value = value.strip().strip('"').strip("'")
+        if value:
+            return value
+    return None
+
+
+def api_key() -> tuple[str | None, str]:
+    """Return the key and where it came from, or (None, "") if there is none.
+
+    The file wins over the environment. It is the place the user was told to put
+    it, so a stale variable left over from an experiment must not silently take
+    precedence over the file they just edited.
+    """
+    for path in key_file_candidates():
+        if path.exists():
+            key = read_key_file(path)
+            if key:
+                return key, str(path)
     key = os.environ.get(KEY_ENV, "").strip()
-    return key or None
+    if key:
+        return key, f"the {KEY_ENV} environment variable"
+    return None, ""
+
+
+def write_key_template(path: Path) -> bool:
+    """Write the empty key file for the user to fill in. True if it was written."""
+    try:
+        path.write_text(KEY_FILE_TEMPLATE, encoding="utf-8")
+    except OSError as exc:
+        logger.error("Could not create %s: %s", path, exc)
+        return False
+    return True
 
 
 def endpoint_query(address: str | None, missing: bool) -> str | None:
@@ -255,14 +348,29 @@ class RouteLookup:
 
 
 def open_lookup(cache_path: Path | None) -> RouteLookup | None:
-    """Return a lookup ready to use, or None with the reason already logged."""
-    key = api_key()
-    if key is None:
+    """Return a lookup ready to use, or None with the reason already logged.
+
+    A missing key is not an error to explain in a sentence and leave: the file
+    that holds it is created here, empty, so the next step is opening a file
+    that already exists and typing into it.
+    """
+    key, source = api_key()
+    if key is not None:
+        logger.info("Routes API key read from %s", source)
+        return RouteLookup(key, cache_path)
+
+    path = key_file_candidates()[0]
+    if path.exists():
         logger.error(
-            "--routes needs a Google Maps Platform API key with the Routes API "
-            "enabled, in the environment variable %s. Set it in the same terminal "
-            "and run the command again.",
-            KEY_ENV,
+            "No key in %s. Open it, paste the key after 'routes_api_key =', save "
+            "it, and run the command again.",
+            path,
         )
-        return None
-    return RouteLookup(key, cache_path)
+    elif write_key_template(path):
+        logger.error(
+            "No API key yet, so %s was just created for you. Open it, paste the "
+            "key after 'routes_api_key =', save it, and run the command again. "
+            "The file is gitignored — it stays on this computer.",
+            path,
+        )
+    return None

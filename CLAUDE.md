@@ -28,15 +28,16 @@ in `exports/` and writes the CSV beside it, under the same name:
 py -m timeline_scraper flatten
 ```
 
-To fill the two route columns as well, set the key once in the terminal and add `--routes`:
-
-```
-set GOOGLE_MAPS_API_KEY=...
-```
+To fill the two route columns as well, add `--routes`:
 
 ```
 py -m timeline_scraper flatten --routes
 ```
+
+The first run with no key creates `api-keys.txt` in the project folder and stops. Open it,
+paste the key after `routes_api_key =`, save, run the command again. That is the whole
+setup, once — the file is gitignored, so it stays on the laptop and never reaches a commit.
+A `GOOGLE_MAPS_API_KEY` environment variable still works and is read second.
 
 Every new pair of addresses is one billed Routes API call per toll setting, so two per trip;
 the answers are cached in `exports/route-cache.json` and never asked for twice.
@@ -335,6 +336,8 @@ miles, route_mi_with_tolls, route_mi_no_tolls, mode
 
 - English only — no Russian in code, comments, commits, or docs
 - No personal data committed — exports live outside the repo
+- The API key lives in `api-keys.txt` in the project folder, gitignored. Never in the
+  source, never in a commit, never typed into a chat
 - Use `py` not `python` on Windows
 - Do not use `ZoneInfo` without adding `tzdata` to pyproject.toml dependencies
   (Windows has no built-in timezone database)

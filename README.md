@@ -119,9 +119,12 @@ same two addresses — one allowing tolls, one avoiding them — and they are fi
 `flatten --routes` is given a Google Maps Platform API key:
 
 ```
-set GOOGLE_MAPS_API_KEY=...
 python -m timeline_scraper flatten --routes
 ```
+
+The first run without a key creates `api-keys.txt` in the project folder and stops. Paste
+the key after `routes_api_key =`, save, run again. The file is gitignored and never leaves
+the machine; a `GOOGLE_MAPS_API_KEY` environment variable is read second if it is set.
 
 Neither number is corrected into the other: a detour is legitimate, so a track longer than
 the route is a row to look at, not an error to fix. Answers are cached per address pair in
