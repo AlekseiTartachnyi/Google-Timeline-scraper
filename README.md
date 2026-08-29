@@ -23,12 +23,12 @@ and structured fields (time, distance, address) are parsed on top.
 
 ## How it works
 
-Two deterministic commands — no autonomous agents:
+Three deterministic commands — no autonomous agents:
 
 | Command   | Direction   | What it does                                         |
 |-----------|-------------|------------------------------------------------------|
-| `scrape`  | phone → JSON | Drives the phone, walks the date range, captures every visible block losslessly |
-| `flatten` | JSON → CSV   | Flattens the JSON into a labeling-ready table         |
+| `scrape`  | phone → JSON | Drives the phone, walks the date range, captures every visible block losslessly — one JSON per calendar month, one CSV for the range |
+| `flatten` | JSON → CSV   | Flattens one or more exports into a single labeling-ready table |
 | `routes`  | CSV → CSV    | Fills the Tolls / No tolls columns of an existing sheet |
 
 Capture is **lossless first**: the accessibility tree (`uiautomator dump`) is the primary
@@ -67,20 +67,33 @@ are handled by scrolling to the end and de-duplicating.
 # numbered report, the mileage sheet, and its routed miles from the Routes API
 python -m timeline_scraper scrape --month 2026-07 --routes
 
-# Any other range, and without the billed route lookups
-python -m timeline_scraper scrape --start 2026-05-01 --end 2026-06-07 --out ~/timeline-exports/
+# Any range, however long — a year is asked for exactly like a week
+python -m timeline_scraper scrape --start 2025-09-06 --end 2026-08-28
 
 # Flatten the JSON into a CSV table
 python -m timeline_scraper flatten --in timeline.json --out timeline.csv
+
+# Every export in a folder, merged into one sheet — a year of months, one CSV
+python -m timeline_scraper flatten --in exports
 
 # Or, with no arguments: take the newest export and write the CSV beside it
 python -m timeline_scraper flatten
 ```
 
-If `--start`, `--end`, or `--out` are omitted, the script prompts for them. The end date
-defaults to **yesterday** (the current day is excluded). Output is saved **outside the repo**
-(default `~/timeline-exports/`) with a timestamped filename, and the run is **crash-safe**:
-progress is flushed after each day and can be resumed if interrupted.
+**A long range is stored a month at a time and flattened once.** Whatever the two dates are,
+the days come off the phone one by one into **one JSON per calendar month** — the months at
+the ends as short as the dates make them — and the **whole range becomes a single CSV**. The
+sheet is built from all the months at once, so a drive that crossed midnight from one month
+into the next is written once rather than claimed on both.
+
+The run is **crash-safe**: progress is flushed after every day into that month's
+`.partial.json`. Re-running the same command leaves the months already exported alone,
+resumes the month it stopped inside, and retries the days that failed; `--refresh` collects
+the range again from scratch. The sheet is written only once every day of the range has been
+through the phone — a sheet that stops in October reads exactly like a year with no driving
+after October.
+
+Output is saved **outside the repo** (default `exports/`, or `--out PATH`).
 
 ## Output
 
@@ -150,13 +163,15 @@ the route is a row to look at, not an error to fix. Answers are cached per addre
 ```
 timeline-scraper/
   src/timeline_scraper/
-    cli.py        # entrypoint: scrape / flatten
+    cli.py        # entrypoint: scrape / flatten / routes
     adb.py        # adb wrappers (shell, tap, swipe, dump, screencap)
     nav.py        # open Maps, reach Timeline, set/advance date
     extract.py    # UI dump -> ordered text blocks (scroll + dedupe)
     parse.py      # best-effort structured fields
     ocr.py        # screenshot -> Tesseract fallback
-    model.py      # data model + JSON (de)serialization
+    model.py      # data model + JSON (de)serialization, merging exports
+    naming.py     # export file names, the range split into months
+    report.py     # the numbered report, and the index of a range split by month
     flatten.py    # JSON -> CSV
     routes.py     # routed miles from the Google Routes API
   tests/          # unit tests on parse/flatten against fixture dumps
@@ -172,7 +187,8 @@ developed and verified **without a phone attached**.
 - [ ] **M2** — Capture one day losslessly to JSON (+ save location & conflict handling)
 - [x] **M3** — Scrape the previous 7 days with crash-safe incremental saving
 - [x] **M4** — Flatten 7 days to CSV
-- [ ] **M5** — Export a full previous month to JSON and CSV
+- [ ] **M5** — Export a full previous month to JSON and CSV (and any longer range: one JSON
+  per month, one CSV)
 - [ ] **M6** — Polish: interactive prompts, logging, tests, docs
 
 ## Privacy & data handling

@@ -7,7 +7,7 @@ regional setting the laptop happens to carry.
 
 from calendar import monthrange
 from datetime import date as date_type
-from datetime import datetime
+from datetime import datetime, timedelta
 
 _MONTHS = (
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -98,3 +98,23 @@ def run_stem(first: date_type, last: date_type) -> str:
     if is_whole_month(first, last):
         return month_stem(first)
     return range_stem(first, last)
+
+
+def month_chunks(first: date_type, last: date_type) -> list[tuple[date_type, date_type]]:
+    """Split a range into one piece per calendar month, oldest first.
+
+    A year asked for in one command is still stored a month at a time: a month
+    is the unit the mileage is filed in, it is small enough to open and check by
+    eye, and a run that dies in June does not take the months before it down.
+    The first and last pieces are as short as the range makes them — a range
+    starting on the 6th begins with a 25-day September, not a whole one.
+    """
+    if first > last:
+        return []
+    chunks: list[tuple[date_type, date_type]] = []
+    cursor = first
+    while cursor <= last:
+        month_end = cursor.replace(day=monthrange(cursor.year, cursor.month)[1])
+        chunks.append((cursor, min(month_end, last)))
+        cursor = month_end + timedelta(days=1)
+    return chunks

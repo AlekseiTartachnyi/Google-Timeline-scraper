@@ -144,3 +144,24 @@ def render_run(run: Run) -> str:
     if len(run.days) > 1:
         blocks.append(render_summary(run))
     return f"\n{_SEPARATOR}\n\n".join(blocks)
+
+
+def render_index(run: Run, parts: list[tuple[str, Run]]) -> str:
+    """Return what a range split across month files came to, and where the months are.
+
+    A year of days is too long to print, and pasting twelve reports into one
+    file only makes a file nobody opens. What the range needs is the two
+    numbers that decide whether it can be filed and a list saying which file
+    holds which month — the day-by-day reading is in those files.
+    """
+    lines = [render_summary(run).rstrip("\n"), "", "Months:"]
+    for name, part in parts:
+        captured = [d for d in part.days if d.status != STATUS_FAILED]
+        failed = len(part.days) - len(captured)
+        trips = [t for d in captured for t in d.trips]
+        miles = round(sum(t.distance_mi for t in trips if t.distance_mi is not None), 1)
+        line = f"   {name} - {len(captured)} day(s), {len(trips)} trip(s), {miles} mi"
+        if failed:
+            line += f", {failed} not captured"
+        lines.append(line)
+    return "\n".join(lines) + "\n"

@@ -24,6 +24,37 @@ no flags at all the scrape covers the seven days ending on the M3 test day, 2026
 another range is `--start YYYY-MM-DD --end YYYY-MM-DD`, and a single day is the same date in
 both. `--out PATH` puts the files somewhere other than `exports/`.
 
+**A range of any length is one command.** The two dates are the only thing that changes —
+a year is asked for exactly like a week:
+
+```
+py -m timeline_scraper scrape --start 2025-09-06 --end 2026-08-28 --routes
+```
+
+However long the range, it is stored **one JSON per calendar month** and flattened into **one
+CSV for the whole range**. The months at the ends are as short as the dates make them:
+2025-Sep-06 to 2025-Sep-30 is a file, September's remaining 25 days, and the last file stops
+on 2026-Aug-28. A month that the range covers end to end is named for the month alone, so
+the October inside a year and an October scraped on its own are the same file.
+
+The split is what makes a long run survivable: a month is small enough to open and check by
+eye, it is the unit the mileage is filed in, and a run that dies in June does not take the
+months before it down. The sheet is still one file, built from all the months at once — so a
+drive that left on the last night of one month and arrived in the next is recognised as one
+drive and its miles are claimed once, which pasting the monthly sheets together would not do.
+
+Re-running the same command carries on where it stopped: a month whose export is already on
+disk is left alone and never walked again, the month the run stopped inside resumes from its
+`.partial.json`, and the days that failed are retried. `--refresh` collects every day of the
+range again instead. A single month asked for on its own (`--month 2026-07`, or the two
+dates spelling out one month) is always collected again — that is what asking for it means.
+
+The sheet is only written when every day of the range has been through the phone. A run that
+ends early — the cable comes out, the phone goes away — keeps its finished months, keeps the
+unfinished one as a partial, and says which days were never reached. A sheet that stops in
+October reads exactly like a year with no driving after October, so it is not written until
+the year is whole.
+
 Drop `--routes` and everything else still happens — the JSON, the report and the CSV — with
 the two route columns left empty. Nothing is asked of Google and nothing is billed.
 
@@ -56,6 +87,19 @@ py -m timeline_scraper flatten
 Another file is `--in "exports/timeline_2026-Jul.json"` — quote the name if it has spaces in
 it, as a range export does — and `--out PATH` names the CSV. `--routes` fills the two route
 columns, the same lookups the scrape does.
+
+`--in` takes more than one name, and they are merged into a single sheet, so a year already
+on disk becomes one CSV without touching the phone. A name may be a pattern or a folder:
+
+```
+py -m timeline_scraper flatten --in exports
+```
+
+A folder means every finished export in it, oldest file first; a pattern is expanded by the
+program, not the shell, so `--in "exports/timeline_2025-*.json"` works on Windows as it
+stands. The sheet is named for the range the merged months cover unless `--out` names it.
+Where two files carry the same day the later one wins — Google keeps revising a day for a
+while after it happens — and a day that failed never beats a day that was captured.
 
 Price a sheet again after editing it by hand. This reads the addresses out of the CSV, not
 out of the JSON, so corrected addresses and deleted rows are what gets sent:
@@ -126,6 +170,23 @@ exports/
     timeline_2026-Jul.csv
 ```
 
+A range that spans months is stored a month at a time, and the range itself owns only the
+sheet and a short index — the day-by-day reading stays in the month files, because twelve
+reports pasted into one file is a file nobody opens:
+
+```
+exports/
+    timeline_2025-Sep-06 - 2025-Sep-30.json     the days the range starts on
+    timeline_2025-Sep-06 - 2025-Sep-30.txt
+    timeline_2025-Oct.json                      a month the range covers end to end
+    timeline_2025-Oct.txt
+    ...
+    timeline_2026-Aug-01 - 2026-Aug-28.json     the days the range ends on
+    timeline_2026-Aug-01 - 2026-Aug-28.txt
+    timeline_2025-Sep-06 - 2026-Aug-28.csv      one sheet for the whole range
+    timeline_2025-Sep-06 - 2026-Aug-28.txt      what the range came to, and which file holds which month
+```
+
 The name comes from the range, not from the flag that asked for it, so `--month 2026-07`
 and the two dates spelled out resume the same partial file and replace the same export.
 
@@ -141,10 +202,11 @@ A screen that defeats the navigation is saved next to the export as
 `dump_calendar-not-found_2026-Aug-15_11-22-33.xml` (or `dump_day-cell-not-found_...`),
 and the file name is printed in the error. That dump is what settles the next fix.
 
-While a range is being collected the same name carries a `.partial.json` suffix. It is
-rewritten after every scraped day and deleted when the range finishes, so an interrupted
-run keeps what it already read off the screen; re-running the same command resumes from
-there and retries the days that failed.
+While a month is being collected its name carries a `.partial.json` suffix. It is rewritten
+after every scraped day and deleted when that month finishes, so an interrupted run keeps
+what it already read off the screen; re-running the same command resumes from there and
+retries the days that failed. A partial is named for the days it covers and never for the
+collection time — a resumed run has to find the file the interrupted one left.
 
 Both names are built in `naming.py`. Months come from a table there, never from
 `strftime('%b')`, which follows the laptop's regional setting.
@@ -240,7 +302,9 @@ in every one. Do not raise it again.
 - [x] M3 — Scrape 7 days with crash-safe incremental save
 - [x] M4 — Flatten to CSV (no tests here — they are M6)
 - [ ] M5 — Full month export (`--month`, the calendar walked across months, the sheet written
-      by the scrape itself; waiting on a July run)
+      by the scrape itself; waiting on a July run). A range of any length is stored one JSON
+      per calendar month and flattened into one CSV — same code path, so the July run settles
+      both
 - [ ] M6 — Polish: interactive prompts, logging, tests
 
 ## How branches are named
@@ -257,7 +321,7 @@ push to a name the user has not been told about.
 
 ## Working branch
 
-`claude/monthly-data-collection-csv-mvkplk`
+`claude/timeline-data-csv-export-9zoadb`
 
 The branch name changes with every task. Use the branch named at the end of the reply,
 never a remembered one.
@@ -269,11 +333,11 @@ git fetch origin
 ```
 
 ```
-git checkout claude/monthly-data-collection-csv-mvkplk
+git checkout claude/timeline-data-csv-export-9zoadb
 ```
 
 ```
-git pull origin claude/monthly-data-collection-csv-mvkplk
+git pull origin claude/timeline-data-csv-export-9zoadb
 ```
 
 If local files look wrong (errors from code you did not write), throw them away:
@@ -283,7 +347,7 @@ git fetch origin
 ```
 
 ```
-git reset --hard origin/claude/monthly-data-collection-csv-mvkplk
+git reset --hard origin/claude/timeline-data-csv-export-9zoadb
 ```
 
 ## When to print the git commands
@@ -418,9 +482,9 @@ src/timeline_scraper/
     model.py    — Visit / Trip / Day dataclasses + JSON serialization
     extract.py  — UI dump -> ordered descriptions, scroll + dedupe, bounds helper
     parse.py    — descriptions -> visits and trips, endpoint linking
-    naming.py   — export file names and the report's date header, English month table
-    report.py   — a day rendered as the numbered list checked by eye
+    naming.py   — export file names, the range split into months, English month table
     flatten.py  — JSON -> the mileage CSV, one row per drive; route columns of a written sheet
+    report.py   — a day, a range, and the index of a range split across month files
     routes.py   — routed miles between two addresses, Google Routes API + cache
 ```
 

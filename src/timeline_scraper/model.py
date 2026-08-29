@@ -225,6 +225,43 @@ class Run:
         )
 
 
+def merge_runs(runs: list[Run]) -> Run:
+    """Return one run holding every day of several, oldest day first.
+
+    A long range is stored a month per file; the sheet is written from all of
+    them at once rather than by pasting the months together afterwards, so a
+    drive that left on the last night of one month and arrived in the next is
+    still recognised as one drive and its miles are claimed once.
+
+    A date carried by more than one file is kept once. A day that was captured
+    beats a day that failed, and between two captured copies the later file
+    wins: Google keeps revising a day for a while after it happens, so the
+    newer reading of it is the one to keep. Callers that care about which is
+    newer pass the files in that order.
+    """
+    if not runs:
+        raise ValueError("no runs to merge")
+
+    by_date: dict[str, DayResult] = {}
+    for run in runs:
+        for day in run.days:
+            standing = by_date.get(day.date)
+            if (
+                standing is not None
+                and day.status == STATUS_FAILED
+                and standing.status != STATUS_FAILED
+            ):
+                continue
+            by_date[day.date] = day
+
+    merged = Run(
+        first_date=min(run.first_date for run in runs),
+        last_date=max(run.last_date for run in runs),
+        days=sorted(by_date.values(), key=lambda d: d.date),
+    )
+    return merged
+
+
 def write_run_json(run: Run, path: Path) -> int:
     """Write the whole run as JSON. Returns how many trips were written.
 

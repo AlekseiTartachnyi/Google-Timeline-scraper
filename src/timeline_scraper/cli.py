@@ -1,11 +1,13 @@
-"""CLI entrypoint — scrape and flatten commands."""
+"""CLI entrypoint — the scrape, flatten and routes commands."""
 
 import argparse
 import logging
 import sys
 import time
 from calendar import monthrange
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from glob import glob
 from pathlib import Path
 
 from .adb import ADBError, devices, is_locked, wake_screen
@@ -16,14 +18,15 @@ from .model import (
     DayResult,
     Run,
     day_result,
+    merge_runs,
     read_run_json,
     write_run_json,
 )
-from .naming import draft_stem, run_stem
+from .naming import draft_stem, month_chunks, run_stem
 from .nav import go_to_date, launch_maps, reach_timeline
 from .parse import build_day
 from .routes import CACHE_NAME, KEY_ENV, RouteLookup, open_lookup
-from .report import render_run
+from .report import render_index, render_run
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +102,17 @@ def _days_in(start: date, end: date) -> list[date]:
     return [start + timedelta(days=i) for i in range((end - start).days + 1)]
 
 
+def _listed(dates: list[str], most: int = 12) -> str:
+    """Return dates as one line, cut short when there are too many to read.
+
+    A day or two is what a run leaves behind; a hundred is what a run that went
+    wrong leaves behind, and printing all of them buries the line that says so.
+    """
+    if len(dates) <= most:
+        return ", ".join(dates)
+    return f"{', '.join(dates[:most])} and {len(dates) - most} more"
+
+
 def _device_present(serial: str) -> bool:
     """Return True if the phone is still attached."""
     try:
@@ -130,34 +144,134 @@ def _pick_device() -> str | None:
     return serial
 
 
-def _load_run(partial_path: Path, start: date, end: date, total: int) -> Run:
-    """Return the run in progress for this range, or a fresh one.
+@dataclass
+class Chunk:
+    """One calendar month of a range: the days it covers and the files it lives in.
 
-    A partial file left by a different range is not this run's business and is
-    ignored — it stays on disk, since the range that wrote it may still be
-    resumed later.
+    A range is scraped day by day from end to end, but stored a month at a
+    time. The chunk is what says which file the day just read off the screen
+    belongs in, and it carries that month's run so an interrupted year keeps
+    every month it already finished.
     """
-    run = read_run_json(partial_path)
+
+    first: date
+    last: date
+    json_path: Path
+    report_path: Path
+    partial_path: Path
+    run: Run = field(default_factory=lambda: Run(first_date="", last_date=""))
+
+    @property
+    def days(self) -> list[date]:
+        """Return every day this month of the range covers, oldest first."""
+        return _days_in(self.first, self.last)
+
+
+def _stored_run(path: Path, first: date, last: date) -> Run | None:
+    """Return the run stored at `path`, if what is in it covers this range.
+
+    A file left by a different range is not this run's business and is left
+    alone: the range that wrote it may still be resumed later.
+    """
+    run = read_run_json(path)
     if run is None:
-        return Run(first_date=start.isoformat(), last_date=end.isoformat())
-    if (run.first_date, run.last_date) != (start.isoformat(), end.isoformat()):
+        return None
+    if (run.first_date, run.last_date) != (first.isoformat(), last.isoformat()):
         logger.warning(
-            "Partial file %s covers %s - %s, not this range; starting fresh",
-            partial_path,
+            "%s covers %s - %s, not %s - %s; ignoring it",
+            path,
             run.first_date,
             run.last_date,
+            first.isoformat(),
+            last.isoformat(),
         )
-        return Run(first_date=start.isoformat(), last_date=end.isoformat())
-    retry = [d.date for d in run.days if d.status == STATUS_FAILED]
-    logger.info(
-        "Resuming %s: %d of %d day(s) already collected",
-        partial_path,
-        len(run.collected_dates),
-        total,
-    )
-    if retry:
-        logger.info("Retrying the day(s) that failed last time: %s", ", ".join(retry))
+        return None
     return run
+
+
+def _load_chunk_run(chunk: Chunk, reuse_finished: bool) -> Run:
+    """Return the month's run in progress, the month already exported, or a fresh one.
+
+    A partial file comes first: it is the run that was interrupted. A finished
+    export counts as collected only when the command covers more than one month
+    — a year re-run after a crash must not walk January again — while a single
+    month asked for on its own is collected again, because that is what asking
+    for it means. `--refresh` says the same thing about every month of a range.
+    """
+    total = len(chunk.days)
+    run = _stored_run(chunk.partial_path, chunk.first, chunk.last)
+    if run is not None:
+        logger.info(
+            "Resuming %s: %d of %d day(s) already collected",
+            chunk.partial_path,
+            len(run.collected_dates),
+            total,
+        )
+        retry = [d.date for d in run.days if d.status == STATUS_FAILED]
+        if retry:
+            logger.info("Retrying the day(s) that failed last time: %s", ", ".join(retry))
+        return run
+
+    if reuse_finished:
+        run = _stored_run(chunk.json_path, chunk.first, chunk.last)
+        if run is not None:
+            logger.info(
+                "%s is already exported: %d of %d day(s) kept as they are "
+                "(delete the file or pass --refresh to collect them again)",
+                chunk.json_path,
+                len(run.collected_dates),
+                total,
+            )
+            return run
+
+    return Run(first_date=chunk.first.isoformat(), last_date=chunk.last.isoformat())
+
+
+def _plan_chunks(
+    start: date, end: date, out_dir: Path, collected_at: datetime, refresh: bool
+) -> list[Chunk]:
+    """Return the range split into months, each carrying whatever is already on disk.
+
+    The file names are the ones the range would have had if each month had been
+    asked for on its own — a whole month is `timeline_2026-Jul`, a month cut
+    short by the ends of the range spells its days out — so a month scraped
+    inside a year and the same month scraped alone are the same file.
+    """
+    pieces = month_chunks(start, end)
+    one_day = start == end
+    chunks = []
+    for first, last in pieces:
+        # A single day keeps the collection time in its name: Google revises a
+        # day for a while afterwards, so a second reading of it must not
+        # overwrite the first.
+        stem = draft_stem(first, collected_at) if one_day else run_stem(first, last)
+        chunk = Chunk(
+            first=first,
+            last=last,
+            json_path=out_dir / f"{stem}.json",
+            report_path=out_dir / f"{stem}.txt",
+            # The partial is named for the days, never for the collection time:
+            # a resumed run has to find the file the interrupted one left.
+            partial_path=out_dir / f"{run_stem(first, last)}.partial.json",
+        )
+        chunk.run = _load_chunk_run(chunk, reuse_finished=len(pieces) > 1 and not refresh)
+        chunks.append(chunk)
+    return chunks
+
+
+def _pending_days(chunks: list[Chunk]) -> list[tuple[date, Chunk]]:
+    """Return the days still to scrape, oldest first, each with the month it belongs to.
+
+    A day that failed earlier is retried, so its old entry is dropped from the
+    month first — otherwise the retry would be recorded beside the failure.
+    """
+    pending: list[tuple[date, Chunk]] = []
+    for chunk in chunks:
+        done = chunk.run.collected_dates
+        todo = [d for d in chunk.days if d.isoformat() not in done]
+        chunk.run.forget({d.isoformat() for d in todo})
+        pending.extend((day, chunk) for day in todo)
+    return pending
 
 
 def _scrape_day(target: date, serial: str, dump_dir: Path) -> DayResult:
@@ -189,8 +303,116 @@ def _restart_maps(serial: str) -> bool:
     return True
 
 
+def _is_complete(chunk: Chunk) -> bool:
+    """Return True if every day of this month has been through the phone.
+
+    A day that failed counts: it was attempted, its failure is recorded, and
+    the export says so. A day that was never reached does not — the run stopped
+    before it, and a month missing a day it never tried is not a month anyone
+    should file.
+    """
+    return {d.isoformat() for d in chunk.days} <= {d.date for d in chunk.run.days}
+
+
+def _write_chunk(chunk: Chunk) -> tuple[str, Run] | None:
+    """Write one finished month's export and report; return its name and run.
+
+    A month the run never got to the end of is not written as an export: a file
+    named for the month reads as the settled month, and one silently missing
+    the days the run never reached is the kind of hole a mileage record cannot
+    carry. It stays a `.partial.json` instead, which is what the next run
+    resumes from.
+    """
+    chunk.run.sort_days()
+    if not _is_complete(chunk):
+        if chunk.run.days:
+            write_run_json(chunk.run, chunk.partial_path)
+            logger.warning(
+                "%s to %s is unfinished: %d of %d day(s) collected, kept in %s",
+                chunk.first.isoformat(),
+                chunk.last.isoformat(),
+                len(chunk.run.days),
+                len(chunk.days),
+                chunk.partial_path,
+            )
+        else:
+            logger.warning(
+                "%s to %s was never reached; nothing written for it",
+                chunk.first.isoformat(),
+                chunk.last.isoformat(),
+            )
+        return None
+
+    written = write_run_json(chunk.run, chunk.json_path)
+    chunk.report_path.write_text(render_run(chunk.run), encoding="utf-8")
+    chunk.partial_path.unlink(missing_ok=True)
+    logger.info(
+        "Wrote %s (%d day(s), %d trip(s)) and %s",
+        chunk.json_path,
+        len(chunk.run.days),
+        written,
+        chunk.report_path,
+    )
+    return chunk.json_path.name, chunk.run
+
+
+def _walk_days(
+    pending: list[tuple[date, Chunk]], serial: str, out_dir: Path
+) -> bool:
+    """Scrape every day still outstanding, saving after each one.
+
+    Returns False when the phone went away mid-run: what was read off the
+    screen is already on disk by then, so the caller stops rather than spending
+    the rest of the range failing.
+    """
+    in_a_row = 0
+    for position, (target, chunk) in enumerate(pending, start=1):
+        logger.info("Day %s (%d of %d)", target.isoformat(), position, len(pending))
+        try:
+            result = _scrape_day(target, serial, out_dir)
+        except (ADBError, RuntimeError) as exc:
+            logger.error("Day %s not captured: %s", target.isoformat(), exc)
+            result = DayResult(
+                date=target.isoformat(), status=STATUS_FAILED, error=str(exc)
+            )
+            chunk.run.days.append(result)
+            chunk.run.sort_days()
+            write_run_json(chunk.run, chunk.partial_path)
+            if not _device_present(serial):
+                logger.error(
+                    "Device %s is gone. Progress is kept in the .partial.json files "
+                    "beside the exports — re-run the same command to continue from here.",
+                    serial,
+                )
+                return False
+            in_a_row += 1
+            if in_a_row >= _FAILURES_BEFORE_RESTART and position < len(pending):
+                _restart_maps(serial)
+                in_a_row = 0
+            continue
+
+        in_a_row = 0
+        chunk.run.days.append(result)
+        chunk.run.sort_days()
+        write_run_json(chunk.run, chunk.partial_path)
+        logger.info(
+            "Day %s: %d trip(s)%s; progress saved to %s",
+            target.isoformat(),
+            len(result.trips),
+            "" if result.confirmed else " (date never confirmed on screen)",
+            chunk.partial_path,
+        )
+    return True
+
+
 def cmd_scrape(args: argparse.Namespace) -> int:
-    """Capture a range of Timeline days: driving and missing travel, to JSON and a report."""
+    """Capture a range of Timeline days: driving and missing travel, to JSON and a report.
+
+    However long the range, the days come off the phone one at a time and are
+    stored one month per JSON file. The mileage sheet is written once, from all
+    of those months at once, so a range asked for in a single command comes out
+    as a single sheet.
+    """
     _setup_logging(args.verbose)
 
     try:
@@ -201,13 +423,6 @@ def cmd_scrape(args: argparse.Namespace) -> int:
 
     days = _days_in(start, end)
     out_dir = Path(args.out).expanduser() if args.out else _DEFAULT_OUT_DIR
-    # The partial is named for the range, never for the collection time: a
-    # resumed run has to find the file the interrupted one left behind.
-    partial_path = out_dir / f"{run_stem(start, end)}.partial.json"
-    stem = draft_stem(start, datetime.now()) if start == end else run_stem(start, end)
-    json_path = out_dir / f"{stem}.json"
-    report_path = out_dir / f"{stem}.txt"
-    csv_path = out_dir / f"{stem}.csv"
 
     # The key is checked before the phone is touched. Finding out that the
     # Routes API has nothing to authenticate with is worth two seconds at the
@@ -219,17 +434,18 @@ def cmd_scrape(args: argparse.Namespace) -> int:
             return 1
 
     logger.info(
-        "Scraping %d day(s): %s to %s",
+        "Scraping %d day(s): %s to %s, one JSON per calendar month",
         len(days),
         start.isoformat(),
         end.isoformat(),
     )
-    run = _load_run(partial_path, start, end, len(days))
-    done = run.collected_dates
-    pending = [d for d in days if d.isoformat() not in done]
-    # A day that failed earlier is retried, so its old entry has to go.
-    run.forget({d.isoformat() for d in pending})
+    chunks = _plan_chunks(start, end, out_dir, datetime.now(), args.refresh)
+    pending = _pending_days(chunks)
+    logger.info(
+        "%d month file(s); %d day(s) still to collect", len(chunks), len(pending)
+    )
 
+    lost_device = False
     if pending:
         logger.info("ADB preflight check")
         serial = _pick_device()
@@ -249,73 +465,69 @@ def cmd_scrape(args: argparse.Namespace) -> int:
             logger.error("%s", exc)
             return 1
 
-        in_a_row = 0
-        for position, target in enumerate(pending, start=1):
-            logger.info(
-                "Day %s (%d of %d)", target.isoformat(), position, len(pending)
-            )
-            try:
-                result = _scrape_day(target, serial, out_dir)
-            except (ADBError, RuntimeError) as exc:
-                logger.error("Day %s not captured: %s", target.isoformat(), exc)
-                result = DayResult(
-                    date=target.isoformat(), status=STATUS_FAILED, error=str(exc)
-                )
-                run.days.append(result)
-                run.sort_days()
-                write_run_json(run, partial_path)
-                if not _device_present(serial):
-                    logger.error(
-                        "Device %s is gone. Progress is kept in %s — re-run the same "
-                        "command to continue from here.",
-                        serial,
-                        partial_path,
-                    )
-                    return 1
-                in_a_row += 1
-                if in_a_row >= _FAILURES_BEFORE_RESTART and position < len(pending):
-                    _restart_maps(serial)
-                    in_a_row = 0
-                continue
-
-            in_a_row = 0
-            run.days.append(result)
-            run.sort_days()
-            write_run_json(run, partial_path)
-            logger.info(
-                "Day %s: %d trip(s)%s; progress saved to %s",
-                target.isoformat(),
-                len(result.trips),
-                "" if result.confirmed else " (date never confirmed on screen)",
-                partial_path,
-            )
+        lost_device = not _walk_days(pending, serial, out_dir)
     else:
         logger.info("Every day of this range was already collected; writing the export")
 
-    run.sort_days()
-    written = write_run_json(run, json_path)
-    report = render_run(run)
-    report_path.write_text(report, encoding="utf-8")
-    partial_path.unlink(missing_ok=True)
+    # Every month that made it to the end of its days becomes an export; the
+    # one the run stopped inside keeps its partial file and is scraped again
+    # next time.
+    parts = [_write_chunk(chunk) for chunk in chunks]
+    finished = [part for part in parts if part is not None]
+    missing = sorted({d.isoformat() for d in days} - {
+        day.date for chunk in chunks for day in chunk.run.days
+    })
 
-    failed = [d.date for d in run.days if d.status == STATUS_FAILED]
-    logger.info("Wrote %s (%d day(s), %d trip(s))", json_path, len(run.days), written)
-    logger.info("Wrote %s", report_path)
-    # The sheet is written from the same run that is already in memory: the
+    if len(finished) != len(chunks):
+        # The sheet is the thing the mileage is claimed off, so it is never
+        # written from half a range: a sheet that stops in October reads
+        # exactly like a year with no driving after October.
+        logger.error(
+            "The range stopped early: %d of %d month(s) finished, %d day(s) never "
+            "reached. The sheet was not written — re-run the same command to "
+            "carry on from here.",
+            len(finished),
+            len(chunks),
+            len(missing),
+        )
+        if missing:
+            logger.error("Never reached: %s", _listed(missing))
+        return 1
+
+    run = merge_runs([chunk.run for chunk in chunks])
+
+    if len(chunks) == 1:
+        csv_path = chunks[0].json_path.with_suffix(".csv")
+        report = render_run(run)
+    else:
+        # The range gets a name of its own for the sheet and a short index
+        # beside it; the day-by-day reading stays in the month files.
+        stem = run_stem(start, end)
+        csv_path = out_dir / f"{stem}.csv"
+        index_path = out_dir / f"{stem}.txt"
+        report = render_index(run, finished)
+        index_path.write_text(report, encoding="utf-8")
+        logger.info("Wrote %s", index_path)
+
+    # The sheet is written from the same days that are already in memory: the
     # scrape is not finished until the thing the mileage is claimed off exists.
     _write_sheet(run, csv_path, lookup)
+
+    failed = [d.date for d in run.days if d.status == STATUS_FAILED]
     if failed:
-        logger.warning("%d day(s) not captured: %s", len(failed), ", ".join(failed))
+        logger.warning("%d day(s) not captured: %s", len(failed), _listed(failed))
     unconfirmed = [d.date for d in run.days if d.status != STATUS_FAILED and not d.confirmed]
     if unconfirmed:
         logger.warning(
             "%d day(s) the phone never showed the date for: %s — check them by hand",
             len(unconfirmed),
-            ", ".join(unconfirmed),
+            _listed(unconfirmed),
         )
     print()
     print(report)
 
+    if lost_device:
+        return 1
     return 1 if len(failed) == len(run.days) else 0
 
 
@@ -369,8 +581,8 @@ def _open_routes(out_dir: Path) -> RouteLookup | None:
 # flatten
 # ---------------------------------------------------------------------------
 
-def _newest_export(out_dir: Path) -> Path | None:
-    """Return the most recently written finished export in `out_dir`.
+def _finished_exports(out_dir: Path) -> list[Path]:
+    """Return the finished exports in `out_dir`, oldest written first.
 
     A partial file is skipped: it belongs to a run that has not finished, and
     flattening it would produce a sheet with days missing from the middle.
@@ -380,19 +592,81 @@ def _newest_export(out_dir: Path) -> Path | None:
         for path in out_dir.glob("timeline_*.json")
         if not path.name.endswith(".partial.json")
     ]
-    if not finished:
-        return None
-    return max(finished, key=lambda path: path.stat().st_mtime)
+    return sorted(finished, key=lambda path: (path.stat().st_mtime, path.name))
+
+
+def _newest_export(out_dir: Path) -> Path | None:
+    """Return the most recently written finished export in `out_dir`."""
+    finished = _finished_exports(out_dir)
+    return finished[-1] if finished else None
+
+
+def _expand_inputs(patterns: list[str]) -> list[Path]:
+    """Return the export files named on the command line, oldest written first.
+
+    A pattern is expanded here rather than left to the shell: on Windows the
+    program is handed the star as typed, and a year stored a month at a time is
+    not a list anybody should have to type out. A directory means every
+    finished export in it.
+
+    The order is the order they are merged in, and the last reading of a day
+    wins, so the newest file is the one that decides a day two files both
+    carry.
+    """
+    found: list[Path] = []
+    for pattern in patterns:
+        path = Path(pattern).expanduser()
+        if path.is_dir():
+            matches = _finished_exports(path)
+            if not matches:
+                raise ValueError(f"No finished export in {path}")
+        elif any(ch in pattern for ch in "*?["):
+            matches = sorted(
+                (
+                    found_path
+                    for found_path in (Path(m) for m in glob(str(path)))
+                    if not found_path.name.endswith(".partial.json")
+                ),
+                key=lambda found_path: (found_path.stat().st_mtime, found_path.name),
+            )
+            if not matches:
+                raise ValueError(f"{pattern} matched no finished export")
+        elif path.exists():
+            matches = [path]
+        else:
+            raise ValueError(f"No such file: {path}")
+        found.extend(matches)
+    # The same file named twice — a folder and one of the files in it — is read
+    # once, keeping the position it first appeared in.
+    return list(dict.fromkeys(found))
+
+
+def _sheet_path_for(run: Run, sources: list[Path]) -> Path:
+    """Return where the sheet for these exports goes when --out did not say.
+
+    One export keeps its own name. Several are one sheet spanning all of them,
+    so it is named for the range they cover and written beside the first of
+    them.
+    """
+    if len(sources) == 1:
+        return sources[0].with_suffix(".csv")
+    try:
+        first = date.fromisoformat(run.first_date)
+        last = date.fromisoformat(run.last_date)
+    except ValueError:
+        return sources[0].parent / "timeline_merged.csv"
+    return sources[0].parent / f"{run_stem(first, last)}.csv"
 
 
 def cmd_flatten(args: argparse.Namespace) -> int:
-    """Flatten a scraped run to the CSV mileage sheet."""
+    """Flatten one or more scraped runs to a single CSV mileage sheet."""
     _setup_logging(args.verbose)
 
     if args.input:
-        json_path = Path(args.input).expanduser()
-        if not json_path.exists():
-            logger.error("No such file: %s", json_path)
+        try:
+            sources = _expand_inputs(args.input)
+        except ValueError as exc:
+            logger.error("%s", exc)
             return 1
     else:
         found = _newest_export(_DEFAULT_OUT_DIR)
@@ -403,15 +677,28 @@ def cmd_flatten(args: argparse.Namespace) -> int:
                 _DEFAULT_OUT_DIR,
             )
             return 1
-        json_path = found
-        logger.info("Flattening the newest export: %s", json_path)
+        sources = [found]
+        logger.info("Flattening the newest export: %s", found)
 
-    run = read_run_json(json_path)
-    if run is None:
-        logger.error("%s is not a scrape file this version can read", json_path)
-        return 1
+    runs = []
+    for path in sources:
+        run = read_run_json(path)
+        if run is None:
+            logger.error("%s is not a scrape file this version can read", path)
+            return 1
+        runs.append(run)
+    if len(runs) > 1:
+        logger.info(
+            "Merging %d export(s) into one sheet: %s",
+            len(runs),
+            ", ".join(path.name for path in sources),
+        )
+    # Merged before anything is written, never pasted together afterwards: a
+    # drive that crossed from the last night of one month into the next is one
+    # drive, and the sheet has to see both days to recognise it as one.
+    run = merge_runs(runs)
 
-    csv_path = Path(args.out).expanduser() if args.out else json_path.with_suffix(".csv")
+    csv_path = Path(args.out).expanduser() if args.out else _sheet_path_for(run, sources)
 
     lookup = None
     if args.routes:
@@ -436,6 +723,7 @@ def cmd_flatten(args: argparse.Namespace) -> int:
 
     _write_sheet(run, csv_path, lookup)
     return 0
+
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +806,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     # -- scrape ---------------------------------------------------------------
     p_scrape = sub.add_parser(
-        "scrape", help="Drive the phone and capture a range of Timeline days to JSON"
+        "scrape",
+        help=(
+            "Drive the phone and capture a range of Timeline days: one JSON per "
+            "calendar month, and one mileage sheet for the whole range"
+        ),
     )
     p_scrape.add_argument(
         "--start",
@@ -541,6 +833,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output directory (default: exports/)",
     )
     p_scrape.add_argument(
+        "--refresh",
+        action="store_true",
+        help=(
+            "Collect every day of the range again, even the months already "
+            "exported. Without it a range covering more than one month keeps the "
+            "months whose export is already on disk, so an interrupted year "
+            "resumes at the month it stopped in"
+        ),
+    )
+    p_scrape.add_argument(
         "--routes",
         action="store_true",
         help=(
@@ -559,17 +861,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_scrape.set_defaults(func=cmd_scrape)
 
     # -- flatten --------------------------------------------------------------
-    p_flatten = sub.add_parser("flatten", help="Flatten a JSON export to CSV")
+    p_flatten = sub.add_parser(
+        "flatten", help="Flatten one or more JSON exports into a single CSV"
+    )
     p_flatten.add_argument(
         "--in",
         dest="input",
         metavar="PATH",
-        help="Input JSON file (default: the newest finished export in exports/)",
+        nargs="+",
+        help=(
+            "The export(s) to flatten, merged into one sheet in the order given "
+            "(default: the newest finished export in exports/). A name may be a "
+            "pattern — \"exports/timeline_2026-*.json\" — or a folder, meaning "
+            "every finished export in it"
+        ),
     )
     p_flatten.add_argument(
         "--out",
         metavar="PATH",
-        help="Output CSV file (default: the input file's name with .csv)",
+        help=(
+            "Output CSV file (default: the input file's name with .csv, or the "
+            "range the merged exports cover when there is more than one)"
+        ),
     )
     p_flatten.add_argument(
         "--routes",
