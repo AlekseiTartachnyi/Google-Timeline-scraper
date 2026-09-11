@@ -17,6 +17,10 @@ _MONTHS = (
 _WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 _PREFIX = "timeline_"
+# Screenshots are a different kind of thing from an export and are kept apart
+# by name: one folder of pictures, never mixed in with the files that carry
+# numbers.
+_SHOTS_PREFIX = "screens_"
 
 
 def month(day: date_type) -> str:
@@ -61,31 +65,24 @@ def draft_stem(day: date_type, collected_at: datetime) -> str:
     return f"{_PREFIX}{stamp_date(day)}_{collected_at:%H-%M}"
 
 
-def range_stem(first: date_type, last: date_type) -> str:
-    """Return the file stem for a finished range, e.g.
-    'timeline_2026-Aug-20 - 2026-Aug-24'.
-
-    No collection time here: a range file is the settled result, one per range,
-    and a second run of the same range replaces it rather than piling up.
-    """
-    return f"{_PREFIX}{stamp_date(first)} - {stamp_date(last)}"
-
-
-def month_stem(day: date_type) -> str:
-    """Return the file stem for a whole calendar month, e.g. 'timeline_2026-Jul'.
-
-    A month is named for the month and nothing else. The days it covers are the
-    whole of it, so spelling both ends out only makes the name longer than the
-    thing it names.
-    """
-    return f"{_PREFIX}{day.year}-{month(day)}"
-
-
 def is_whole_month(first: date_type, last: date_type) -> bool:
     """Return True if the range is exactly one calendar month, end to end."""
     if (first.year, first.month) != (last.year, last.month):
         return False
     return first.day == 1 and last.day == monthrange(first.year, first.month)[1]
+
+
+def range_name(first: date_type, last: date_type) -> str:
+    """Return the bare name of a range, with no prefix on it.
+
+    A whole calendar month is named for the month; anything else spells both
+    ends out. The shape is decided here once, so every kind of output built
+    from a range — an export, a report, a folder of screenshots — calls the
+    same days by the same name.
+    """
+    if is_whole_month(first, last):
+        return f"{first.year}-{month(first)}"
+    return f"{stamp_date(first)} - {stamp_date(last)}"
 
 
 def run_stem(first: date_type, last: date_type) -> str:
@@ -95,6 +92,34 @@ def run_stem(first: date_type, last: date_type) -> str:
     — `--month 2026-07` and the two dates spelled out — resume the same partial
     file and replace the same export.
     """
-    if is_whole_month(first, last):
-        return month_stem(first)
-    return range_stem(first, last)
+    return f"{_PREFIX}{range_name(first, last)}"
+
+
+def shots_dir_name(first: date_type, last: date_type) -> str:
+    """Return the folder name holding a range of day screenshots, e.g.
+    'screens_2026-Aug-30 - 2026-Sep-05'.
+
+    The same range names the same folder every time, so a second run of the
+    same days fills the folder the first one started rather than making a new
+    one beside it.
+    """
+    return f"{_SHOTS_PREFIX}{range_name(first, last)}"
+
+
+def shot_name(day: date_type, index: int, confirmed: bool = True) -> str:
+    """Return one screenshot's file name, e.g. '2026-Aug-30_Sun_01.png'.
+
+    The date chip scrolls away with the list, so only the first screenful of a
+    day carries the date on it. The file name carries it for the rest — with
+    the weekday, because a lost week of work is argued about in weekdays — and
+    the number is padded so the screens of a day stay in screen order in a
+    folder listing.
+
+    A day the phone never confirmed the date of is named as such. A screenshot
+    filed under the wrong date is worse than one that is missing, and this
+    ends up in front of an insurer.
+    """
+    stem = f"{stamp_date(day)}_{weekday(day)}_{index:02d}"
+    if not confirmed:
+        stem += "_unconfirmed"
+    return f"{stem}.png"

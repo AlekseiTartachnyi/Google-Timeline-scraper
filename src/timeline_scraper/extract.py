@@ -86,14 +86,25 @@ def descriptions(nodes: list[UiNode]) -> list[str]:
     return [n.content_desc for n in nodes if n.content_desc]
 
 
+def scroll_step(serial: str | None = None) -> None:
+    """Advance the day list by one screenful, and wait for it to settle.
+
+    One gesture, defined once: 80% of the screen height up to 35% over 400 ms.
+    It is the swipe the day list has been read with since M2.2, so anything
+    that walks a day — collecting its rows, photographing it — moves it the
+    same measured way rather than inventing a gesture of its own.
+    """
+    width, height = adb.screen_size(serial=serial)
+    adb.swipe(width // 2, int(height * 0.80), width // 2, int(height * 0.35), 400, serial=serial)
+    time.sleep(_SCROLL_SETTLE_S)
+
+
 def collect_day(serial: str | None = None, max_swipes: int = 40) -> list[str]:
     """Scroll the whole day and return every accessibility description, in order.
 
     Swipes up until a full pass adds nothing new, merging each dump into the
     running list. Duplicates are dropped, order of first appearance is kept.
     """
-    width, height = adb.screen_size(serial=serial)
-    x = width // 2
     collected: list[str] = []
     seen: set[str] = set()
 
@@ -107,8 +118,7 @@ def collect_day(serial: str | None = None, max_swipes: int = 40) -> list[str]:
         logger.debug("Scroll pass %d: %d new rows (%d total)", swipe_index, added, len(collected))
         if added == 0:
             break
-        adb.swipe(x, int(height * 0.80), x, int(height * 0.35), 400, serial=serial)
-        time.sleep(_SCROLL_SETTLE_S)
+        scroll_step(serial=serial)
 
     logger.info("Collected %d rows from the Timeline list", len(collected))
     return collected

@@ -1,4 +1,4 @@
-"""CLI entrypoint — scrape and flatten commands."""
+"""CLI entrypoint — scrape, shots, flatten and routes commands."""
 
 import argparse
 import logging
@@ -12,18 +12,31 @@ from .adb import ADBError, devices, is_locked, wake_screen
 from .extract import collect_day
 from .flatten import MISSING_INFO, fill_sheet_routes, row, total_miles, write_run_csv
 from .model import (
+    STATUS_EMPTY,
     STATUS_FAILED,
+    STATUS_OK,
     DayResult,
     Run,
     day_result,
     read_run_json,
     write_run_json,
 )
-from .naming import draft_stem, run_stem
+from .naming import draft_stem, run_stem, shots_dir_name
 from .nav import go_to_date, launch_maps, reach_timeline
 from .parse import build_day
 from .routes import CACHE_NAME, KEY_ENV, RouteLookup, open_lookup
 from .report import render_run
+from .shots import (
+    INDEX_JSON,
+    INDEX_TXT,
+    DayShots,
+    ShotRun,
+    capture_day,
+    discard_day,
+    read_index,
+    render_index,
+    write_index,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +185,32 @@ def _scrape_day(target: date, serial: str, dump_dir: Path) -> DayResult:
     return day_result(day, confirmed=confirmed)
 
 
+def _start_phone() -> str | None:
+    """Wake the phone and put Maps on the Timeline screen. Returns the serial.
+
+    Shared by every command that drives the phone, so a screenshot run reaches
+    the Timeline exactly the way a scrape does. Returns None with the reason
+    already logged.
+    """
+    logger.info("ADB preflight check")
+    serial = _pick_device()
+    if serial is None:
+        return None
+    try:
+        wake_screen(serial=serial)
+        if is_locked(serial=serial):
+            input("  Phone is locked. Unlock it and press Enter to continue...")
+        launch_maps(serial=serial)
+        reach_timeline(serial=serial)
+    except ADBError as exc:
+        logger.error("ADB error: %s", exc)
+        return None
+    except RuntimeError as exc:
+        logger.error("%s", exc)
+        return None
+    return serial
+
+
 def _restart_maps(serial: str) -> bool:
     """Put Maps back on the Timeline screen after a run loses it.
 
@@ -187,6 +226,23 @@ def _restart_maps(serial: str) -> bool:
         logger.error("Could not get back to the Timeline screen: %s", exc)
         return False
     return True
+
+
+def _recover_after_failure(serial: str, in_a_row: int, days_left: bool) -> tuple[int, bool]:
+    """Decide what happens after a day fails. Returns (failures in a row, keep going).
+
+    One failure is a day the phone was slow on. Two in a row is a screen the
+    run is lost on, and Maps is restarted rather than spending the rest of the
+    range failing the same way. A phone that has gone away ends the run — the
+    days already saved are kept either way.
+    """
+    if not _device_present(serial):
+        return in_a_row, False
+    in_a_row += 1
+    if in_a_row >= _FAILURES_BEFORE_RESTART and days_left:
+        _restart_maps(serial)
+        in_a_row = 0
+    return in_a_row, True
 
 
 def cmd_scrape(args: argparse.Namespace) -> int:
@@ -231,22 +287,8 @@ def cmd_scrape(args: argparse.Namespace) -> int:
     run.forget({d.isoformat() for d in pending})
 
     if pending:
-        logger.info("ADB preflight check")
-        serial = _pick_device()
+        serial = _start_phone()
         if serial is None:
-            return 1
-
-        try:
-            wake_screen(serial=serial)
-            if is_locked(serial=serial):
-                input("  Phone is locked. Unlock it and press Enter to continue...")
-            launch_maps(serial=serial)
-            reach_timeline(serial=serial)
-        except ADBError as exc:
-            logger.error("ADB error: %s", exc)
-            return 1
-        except RuntimeError as exc:
-            logger.error("%s", exc)
             return 1
 
         in_a_row = 0
@@ -264,7 +306,10 @@ def cmd_scrape(args: argparse.Namespace) -> int:
                 run.days.append(result)
                 run.sort_days()
                 write_run_json(run, partial_path)
-                if not _device_present(serial):
+                in_a_row, carry_on = _recover_after_failure(
+                    serial, in_a_row, position < len(pending)
+                )
+                if not carry_on:
                     logger.error(
                         "Device %s is gone. Progress is kept in %s — re-run the same "
                         "command to continue from here.",
@@ -272,10 +317,6 @@ def cmd_scrape(args: argparse.Namespace) -> int:
                         partial_path,
                     )
                     return 1
-                in_a_row += 1
-                if in_a_row >= _FAILURES_BEFORE_RESTART and position < len(pending):
-                    _restart_maps(serial)
-                    in_a_row = 0
                 continue
 
             in_a_row = 0
@@ -363,6 +404,174 @@ def _open_routes(out_dir: Path) -> RouteLookup | None:
     addresses that were driven between, and those are personal.
     """
     return open_lookup(out_dir / CACHE_NAME)
+
+
+# ---------------------------------------------------------------------------
+# shots
+# ---------------------------------------------------------------------------
+
+def _resolve_shot_range(args: argparse.Namespace) -> tuple[date, date]:
+    """Return the first and last day to photograph, oldest first.
+
+    Unlike a scrape, this has no default range. A folder of screenshots is
+    handed to somebody as the record of a particular stretch of time, and a run
+    that quietly photographed a different week than the one meant costs the
+    whole run to find out. One day is the same date in both flags.
+    """
+    if args.month:
+        if args.start or args.end:
+            raise ValueError(
+                "--month already names both ends of the range; drop --start and --end"
+            )
+        return _parse_month(args.month)
+
+    if not args.start or not args.end:
+        raise ValueError(
+            "shots needs the days to photograph spelled out: --start YYYY-MM-DD "
+            "--end YYYY-MM-DD, the same date in both for a single day, or "
+            "--month YYYY-MM"
+        )
+    start = _parse_date(args.start, "start")
+    end = _parse_date(args.end, "end")
+    if start > end:
+        raise ValueError(f"--start ({start.isoformat()}) is after --end ({end.isoformat()})")
+    return start, end
+
+
+def _load_shot_run(index_path: Path, start: date, end: date, total: int) -> ShotRun:
+    """Return the screenshot run in progress for this range, or a fresh one."""
+    run = read_index(index_path)
+    if run is None:
+        return ShotRun(first_date=start.isoformat(), last_date=end.isoformat())
+    if (run.first_date, run.last_date) != (start.isoformat(), end.isoformat()):
+        logger.warning(
+            "%s covers %s - %s, not this range; starting fresh",
+            index_path,
+            run.first_date,
+            run.last_date,
+        )
+        return ShotRun(first_date=start.isoformat(), last_date=end.isoformat())
+    retry = [d.date for d in run.days if d.status == STATUS_FAILED]
+    logger.info(
+        "Resuming %s: %d of %d day(s) already photographed",
+        index_path,
+        len(run.collected_dates),
+        total,
+    )
+    if retry:
+        logger.info("Retrying the day(s) that failed last time: %s", ", ".join(retry))
+    return run
+
+
+def cmd_shots(args: argparse.Namespace) -> int:
+    """Photograph a range of Timeline days, one numbered series of screens per day.
+
+    Nothing is parsed and nothing is billed: the phone is walked the same way a
+    scrape walks it, and every screenful is written out as the phone drew it.
+    """
+    _setup_logging(args.verbose)
+
+    try:
+        start, end = _resolve_shot_range(args)
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 1
+
+    days = _days_in(start, end)
+    out_dir = Path(args.out).expanduser() if args.out else _DEFAULT_OUT_DIR
+    shots_dir = out_dir / shots_dir_name(start, end)
+    index_path = shots_dir / INDEX_JSON
+
+    logger.info(
+        "Photographing %d day(s): %s to %s",
+        len(days),
+        start.isoformat(),
+        end.isoformat(),
+    )
+    run = _load_shot_run(index_path, start, end, len(days))
+    done = run.collected_dates
+    pending = [d for d in days if d.isoformat() not in done]
+    run.forget({d.isoformat() for d in pending})
+
+    if pending:
+        serial = _start_phone()
+        if serial is None:
+            return 1
+
+        in_a_row = 0
+        for position, target in enumerate(pending, start=1):
+            logger.info("Day %s (%d of %d)", target.isoformat(), position, len(pending))
+            # Whatever an earlier try left for this day goes before it is tried
+            # again: half a day that reads as a whole one is the one mistake
+            # this folder cannot afford.
+            discard_day(target, shots_dir)
+            try:
+                confirmed = go_to_date(target, serial=serial, dump_dir=shots_dir)
+                time.sleep(_DAY_SETTLE_S)
+                screens = capture_day(
+                    target, shots_dir, serial=serial, confirmed=confirmed
+                )
+            except (ADBError, RuntimeError) as exc:
+                logger.error("Day %s not photographed: %s", target.isoformat(), exc)
+                discard_day(target, shots_dir)
+                run.days.append(
+                    DayShots(
+                        date=target.isoformat(), status=STATUS_FAILED, error=str(exc)
+                    )
+                )
+                run.sort_days()
+                write_index(run, index_path)
+                in_a_row, carry_on = _recover_after_failure(
+                    serial, in_a_row, position < len(pending)
+                )
+                if not carry_on:
+                    logger.error(
+                        "Device %s is gone. The days already photographed are kept "
+                        "in %s — re-run the same command to continue from here.",
+                        serial,
+                        shots_dir,
+                    )
+                    return 1
+                continue
+
+            in_a_row = 0
+            run.days.append(
+                DayShots(
+                    date=target.isoformat(),
+                    status=STATUS_OK if screens else STATUS_EMPTY,
+                    screens=screens,
+                    confirmed=confirmed,
+                )
+            )
+            run.sort_days()
+            write_index(run, index_path)
+    else:
+        logger.info("Every day of this range is already photographed; writing the index")
+
+    run.sort_days()
+    write_index(run, index_path)
+    index_txt = shots_dir / INDEX_TXT
+    index_txt.write_text(render_index(run), encoding="utf-8")
+
+    total = sum(len(d.screens) for d in run.days)
+    logger.info("Wrote %d screen(s) to %s", total, shots_dir)
+    logger.info("Wrote %s", index_txt)
+
+    failed = [d.date for d in run.days if d.status == STATUS_FAILED]
+    if failed:
+        logger.warning("%d day(s) not photographed: %s", len(failed), ", ".join(failed))
+    unconfirmed = [
+        d.date for d in run.days if d.status != STATUS_FAILED and not d.confirmed
+    ]
+    if unconfirmed:
+        logger.warning(
+            "%d day(s) the phone never showed the date for: %s — their screens are "
+            "named 'unconfirmed' and have to be checked by eye before anyone sees them",
+            len(unconfirmed),
+            ", ".join(unconfirmed),
+        )
+
+    return 1 if len(failed) == len(run.days) else 0
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +716,10 @@ def build_parser() -> argparse.ArgumentParser:
     """Build and return the top-level argument parser."""
     parser = argparse.ArgumentParser(
         prog="python -m timeline_scraper",
-        description="Scrape Google Maps Timeline from a Pixel phone via ADB.",
+        description=(
+            "Scrape Google Maps Timeline from a Pixel phone via ADB, or "
+            "photograph the days as they appear on screen."
+        ),
     )
     parser.add_argument(
         "-v", "--verbose",
@@ -557,6 +769,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Timezone for date math (default: America/Chicago)",
     )
     p_scrape.set_defaults(func=cmd_scrape)
+
+    # -- shots ----------------------------------------------------------------
+    p_shots = sub.add_parser(
+        "shots",
+        help=(
+            "Photograph a range of Timeline days: every screenful of every day, "
+            "saved as the phone drew it. Nothing is parsed and nothing is billed"
+        ),
+    )
+    p_shots.add_argument(
+        "--start",
+        metavar="YYYY-MM-DD",
+        help="First day to photograph (required, unless --month names the range)",
+    )
+    p_shots.add_argument(
+        "--end",
+        metavar="YYYY-MM-DD",
+        help="Last day to photograph; the same date as --start for a single day",
+    )
+    p_shots.add_argument(
+        "--month",
+        metavar="YYYY-MM",
+        help="Photograph a whole calendar month, e.g. 2026-08 (instead of --start/--end)",
+    )
+    p_shots.add_argument(
+        "--out",
+        metavar="PATH",
+        help="Directory to put the screens folder in (default: exports/)",
+    )
+    p_shots.set_defaults(func=cmd_shots)
 
     # -- flatten --------------------------------------------------------------
     p_flatten = sub.add_parser("flatten", help="Flatten a JSON export to CSV")

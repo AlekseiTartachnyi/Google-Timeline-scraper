@@ -45,6 +45,39 @@ is checked before the phone is driven, so a missing one costs seconds, not a who
 Every new pair of addresses is one billed Routes API call per toll setting, so two per trip;
 the answers are cached in `exports/route-cache.json` and never asked for twice.
 
+## Photographing the days
+
+A separate command, and a separate kind of output. It drives the phone the same way the
+scrape does — Maps, Timeline, the calendar for the first day, the day bar's arrow for every
+day after it — and saves every screenful of every day exactly as the phone drew it. Nothing
+is parsed, nothing is asked of Google, nothing is billed:
+
+```
+py -m timeline_scraper shots --start 2026-08-30 --end 2026-09-05
+```
+
+This is the picture the sheet was read off. The sheet is what gets added up and argued
+about; the screens are what shows the numbers were not invented, which is the whole reason
+to have them when the reader is an insurer rather than an accountant.
+
+`shots` has no default range. A scrape with the dates wrong costs a re-run; a folder of
+screenshots handed to somebody under the wrong week is worse than none, so the days are
+spelled out or the command refuses. The same date in both flags is one day, and
+`--month 2026-08` is a whole month. `--out PATH` puts the folder somewhere other than
+`exports/`.
+
+Re-running the same command resumes: days already photographed are skipped, days that
+failed are retried, and whatever a half-finished day left on disk is deleted before that day
+is tried again. A day the phone never confirmed the date of keeps its screens, named
+`_unconfirmed` — check those by eye before anyone else sees them.
+
+A day does not fit on one screen, so a day is a numbered series of screens. Consecutive
+screens overlap by more than half, because the swipe that walks the day is the one measured
+to work on this phone (`extract.scroll_step`, 80% of the screen up to 35%) and is not worth
+trading for fewer files. The images are never edited — a screenshot that has been drawn on
+stops being evidence of anything — so the date, which scrolls away with the list after the
+first screen, is carried by the file name and by `index.txt`.
+
 Make the sheet again from an export that already exists, without touching the phone. With no
 flags it takes the newest finished export in `exports/` and writes the CSV beside it, under
 the same name:
@@ -128,6 +161,19 @@ exports/
 
 The name comes from the range, not from the flag that asked for it, so `--month 2026-07`
 and the two dates spelled out resume the same partial file and replace the same export.
+
+Screenshots go in a folder of their own, named for the same range and never mixed in with
+the files that carry numbers:
+
+```
+exports/
+    screens_2026-Aug-30 - 2026-Sep-05/
+        2026-Aug-30_Sun_01.png     the first screen of the day, the one with the date on it
+        2026-Aug-30_Sun_02.png     and down the day from there
+        2026-Sep-03_Thu_01_unconfirmed.png    the phone never named this date
+        index.json                 what the next run resumes from
+        index.txt                  what each day holds, for whoever opens the folder
+```
 
 `route-cache.json` is keyed by the addresses that were driven between, so it is personal
 data and lives with the exports, outside the repo. Deleting it costs money, not correctness:
@@ -216,12 +262,16 @@ Not measured, therefore not to be asserted:
 The one dump that answers both is the day screen's full tree next to the screenshot taken
 at the same moment. Ask for it rather than reasoning around it.
 
-## The per-trip map screenshot is parked
+## The per-trip map screenshot is parked — that is not what `shots` does
 
 Opening each driving trip to screenshot its map was tried and abandoned: the touch lands on
 the map instead of the row, and the WebView gives nothing reliable to aim at. The code for
 both tap strategies is in commit `88e7956` if it is ever picked up again. Until then the
 map is checked by hand, and the scraper's job stops at the JSON and the report.
+
+What failed there was the tap that opens one trip, not the screenshot. `adb.screencap` has
+worked every time it has been asked. `shots` never taps into a row — it photographs the day
+list as it scrolls past — so it is not the parked work and does not inherit its defect.
 
 ## Never propose the Timeline export
 
@@ -243,6 +293,10 @@ in every one. Do not raise it again.
       by the scrape itself; waiting on a July run)
 - [ ] M6 — Polish: interactive prompts, logging, tests
 
+Beside the milestones, not one of them:
+
+- [x] `shots` — every day photographed screen by screen, for showing alongside the sheet
+
 ## How branches are named
 
 `task-<NN>-<YYYY>-<Mon>-<DD>`, for example `task-07-2026-Aug-24`.
@@ -257,7 +311,7 @@ push to a name the user has not been told about.
 
 ## Working branch
 
-`claude/monthly-data-collection-csv-mvkplk`
+`claude/compassionate-noether-3x4fpt`
 
 The branch name changes with every task. Use the branch named at the end of the reply,
 never a remembered one.
@@ -269,11 +323,11 @@ git fetch origin
 ```
 
 ```
-git checkout claude/monthly-data-collection-csv-mvkplk
+git checkout claude/compassionate-noether-3x4fpt
 ```
 
 ```
-git pull origin claude/monthly-data-collection-csv-mvkplk
+git pull origin claude/compassionate-noether-3x4fpt
 ```
 
 If local files look wrong (errors from code you did not write), throw them away:
@@ -283,7 +337,7 @@ git fetch origin
 ```
 
 ```
-git reset --hard origin/claude/monthly-data-collection-csv-mvkplk
+git reset --hard origin/claude/compassionate-noether-3x4fpt
 ```
 
 ## When to print the git commands
@@ -405,7 +459,8 @@ miles, Tolls, No tolls, mode
 - Do not use `ZoneInfo` without adding `tzdata` to pyproject.toml dependencies
   (Windows has no built-in timezone database)
 - Test fixtures must be anonymized
-- No autonomous agents — three deterministic commands only: `scrape`, `flatten`, `routes`
+- No autonomous agents — four deterministic commands only: `scrape`, `shots`, `flatten`,
+  `routes`
 - Never suggest the Google Timeline / Takeout export as a data source
 
 ## Project structure
@@ -416,7 +471,8 @@ src/timeline_scraper/
     adb.py      — adb wrappers: devices, shell, tap, swipe, keyevent, dump_ui, screencap
     nav.py      — launch Maps, navigate to Timeline by accessibility tree text
     model.py    — Visit / Trip / Day dataclasses + JSON serialization
-    extract.py  — UI dump -> ordered descriptions, scroll + dedupe, bounds helper
+    extract.py  — UI dump -> ordered descriptions, the measured scroll, bounds helper
+    shots.py    — a day photographed screen by screen, and the folder's index
     parse.py    — descriptions -> visits and trips, endpoint linking
     naming.py   — export file names and the report's date header, English month table
     report.py   — a day rendered as the numbered list checked by eye

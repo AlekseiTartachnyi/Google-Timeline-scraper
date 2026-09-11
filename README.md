@@ -23,11 +23,12 @@ and structured fields (time, distance, address) are parsed on top.
 
 ## How it works
 
-Two deterministic commands — no autonomous agents:
+Four deterministic commands — no autonomous agents:
 
 | Command   | Direction   | What it does                                         |
 |-----------|-------------|------------------------------------------------------|
 | `scrape`  | phone → JSON | Drives the phone, walks the date range, captures every visible block losslessly |
+| `shots`   | phone → PNG  | Photographs every screenful of every day, exactly as the phone drew it |
 | `flatten` | JSON → CSV   | Flattens the JSON into a labeling-ready table         |
 | `routes`  | CSV → CSV    | Fills the Tolls / No tolls columns of an existing sheet |
 
@@ -69,6 +70,10 @@ python -m timeline_scraper scrape --month 2026-07 --routes
 
 # Any other range, and without the billed route lookups
 python -m timeline_scraper scrape --start 2026-05-01 --end 2026-06-07 --out ~/timeline-exports/
+
+# Photograph a range of days instead of reading them: every screenful of every
+# day, saved as-is. The dates are never assumed — spell them out, or use --month
+python -m timeline_scraper shots --start 2026-08-30 --end 2026-09-05
 
 # Flatten the JSON into a CSV table
 python -m timeline_scraper flatten --in timeline.json --out timeline.csv
@@ -150,12 +155,12 @@ the route is a row to look at, not an error to fix. Answers are cached per addre
 ```
 timeline-scraper/
   src/timeline_scraper/
-    cli.py        # entrypoint: scrape / flatten
+    cli.py        # entrypoint: scrape / shots / flatten / routes
     adb.py        # adb wrappers (shell, tap, swipe, dump, screencap)
     nav.py        # open Maps, reach Timeline, set/advance date
     extract.py    # UI dump -> ordered text blocks (scroll + dedupe)
+    shots.py      # a day photographed screen by screen, and the folder's index
     parse.py      # best-effort structured fields
-    ocr.py        # screenshot -> Tesseract fallback
     model.py      # data model + JSON (de)serialization
     flatten.py    # JSON -> CSV
     routes.py     # routed miles from the Google Routes API
