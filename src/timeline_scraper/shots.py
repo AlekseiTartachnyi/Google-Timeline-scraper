@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .adb import dump_ui, screencap
-from .extract import descriptions, flatten, scroll_step, scroll_to_top
+from .extract import flatten, list_band, list_rows, scroll_step, scroll_to_top
 from .model import STATUS_EMPTY, STATUS_FAILED, STATUS_OK
 from .naming import header_date, shot_name
 
@@ -44,6 +44,11 @@ class DayShots:
     status: str = STATUS_OK
     screens: list[str] = field(default_factory=list)
     error: str | None = None
+    # Screens that share no row with the screen before them: the list moved
+    # further than one swipe should move it, so something may be missing
+    # between the two. Named here and in index.txt rather than left to be
+    # noticed by whoever reads the folder.
+    gaps: list[int] = field(default_factory=list)
     # Whether the phone showed the date that was asked for. A day the screen
     # never named keeps its pictures, but they are named as unconfirmed: a
     # screenshot filed under the wrong date is worse than a missing one.
@@ -57,6 +62,7 @@ class DayShots:
             "error": self.error,
             "confirmed": self.confirmed,
             "screens": list(self.screens),
+            "gaps": list(self.gaps),
         }
 
     @classmethod
@@ -67,6 +73,7 @@ class DayShots:
             status=payload.get("status", STATUS_OK),
             screens=list(payload.get("screens", [])),
             error=payload.get("error"),
+            gaps=list(payload.get("gaps", [])),
             confirmed=payload.get("confirmed", True),
         )
 
@@ -107,12 +114,19 @@ def capture_day(
     serial: str | None = None,
     confirmed: bool = True,
     max_screens: int = _MAX_SCREENS,
-) -> list[str]:
-    """Photograph one open day, top to bottom, and return the file names written.
+) -> tuple[list[str], list[int]]:
+    """Photograph one open day, top to bottom.
+
+    Returns the file names written, and the numbers of any screens that may not
+    meet the screen before them.
 
     The day must already be on screen — `nav.go_to_date` puts it there. The list
     is wound back to its first row first, because collecting or photographing a
     day leaves it at the bottom.
+
+    Only the rows inside the scrolling strip count. The header, the tabs, the
+    map and the day bar are on every screenful of every day, so a walk that
+    counted them would never see a screen as new.
 
     The loop takes the picture before it reads the tree, so the screenshot and
     the rows it is judged by are one moment. A pass that adds no row it has not
@@ -121,26 +135,51 @@ def capture_day(
     """
     scroll_to_top(serial=serial)
     out_dir.mkdir(parents=True, exist_ok=True)
+    _, top, _ = list_band(serial=serial)
 
     names: list[str] = []
+    gaps: list[int] = []
     seen: set[str] = set()
-    previous: bytes | None = None
+    previous_shot: bytes | None = None
+    previous_rows: list[str] = []
 
     for index in range(1, max_screens + 1):
         shot = screencap(serial=serial)
-        rows = descriptions(flatten(dump_ui(serial=serial)))
+        rows = list_rows(flatten(dump_ui(serial=serial)), top)
         fresh = [row for row in rows if row not in seen]
         seen.update(rows)
 
-        if previous is not None and shot == previous and not fresh:
+        if previous_shot is not None and shot == previous_shot and not fresh:
             logger.debug("Screen %d is the one before it; the day is already at its end", index)
             break
+
+        # The swipe is meant to leave about two fifths of the screenful on
+        # screen. If a screen has nothing at all in common with the one before
+        # it, the list moved further than that and something fell between the
+        # two — say so rather than handing over a folder with a hole in it.
+        if previous_rows and rows and not set(rows) & set(previous_rows):
+            logger.warning(
+                "%s: screen %d has no row in common with screen %d — the list "
+                "moved further than one swipe should move it, and a row may "
+                "have been skipped between them",
+                target.isoformat(),
+                index,
+                index - 1,
+            )
+            gaps.append(index)
 
         name = shot_name(target, index, confirmed)
         (out_dir / name).write_bytes(shot)
         names.append(name)
-        previous = shot
-        logger.debug("Screen %d of %s: %d new row(s)", index, target.isoformat(), len(fresh))
+        previous_shot = shot
+        previous_rows = rows
+        logger.debug(
+            "Screen %d of %s: %d row(s) in the list, %d of them new",
+            index,
+            target.isoformat(),
+            len(rows),
+            len(fresh),
+        )
 
         if not fresh:
             break
@@ -152,8 +191,8 @@ def capture_day(
             max_screens,
         )
 
-    logger.info("Day %s: %d screen(s)", target.isoformat(), len(names))
-    return names
+    logger.info("Day %s: %d screen(s), %d row(s) seen", target.isoformat(), len(names), len(seen))
+    return names, gaps
 
 
 def discard_day(target: date_type, out_dir: Path) -> int:
@@ -212,8 +251,10 @@ def render_index(run: ShotRun) -> str:
         f"Timeline screens, {run.first_date} to {run.last_date}",
         "",
         "Every screenful of every day, in the order it appears on the phone.",
-        "The date is on the first screen of a day only — it scrolls away with",
-        "the list — so the rest carry it in the file name.",
+        "The day bar reading the date sits above the part that scrolls, so it",
+        "is on every screen of a day, not only the first. The file name carries",
+        "the date as well, so a screen that gets separated from the folder can",
+        "still be placed.",
         "",
     ]
     for day in run.days:
@@ -227,8 +268,9 @@ def render_index(run: ShotRun) -> str:
             count = len(day.screens)
             note = "" if day.confirmed else "  (the phone never confirmed this date)"
             lines.append(f"{head}  —  {count} screen(s){note}")
-            for name in day.screens:
-                lines.append(f"    {name}")
+            for position, name in enumerate(day.screens, start=1):
+                mark = "   <- may not meet the screen above" if position in day.gaps else ""
+                lines.append(f"    {name}{mark}")
         lines.append("")
 
     captured = [d for d in run.days if d.status != STATUS_FAILED]
@@ -240,4 +282,7 @@ def render_index(run: ShotRun) -> str:
     unconfirmed = [d.date for d in run.days if d.status != STATUS_FAILED and not d.confirmed]
     if unconfirmed:
         lines.append(f"Date never confirmed on screen: {', '.join(unconfirmed)}")
+    gapped = [d.date for d in run.days if d.gaps]
+    if gapped:
+        lines.append(f"Screens that may not meet, so a row could be missing: {', '.join(gapped)}")
     return "\n".join(lines) + "\n"

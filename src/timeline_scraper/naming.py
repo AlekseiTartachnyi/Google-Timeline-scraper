@@ -109,11 +109,12 @@ def shots_dir_name(first: date_type, last: date_type) -> str:
 def shot_name(day: date_type, index: int, confirmed: bool = True) -> str:
     """Return one screenshot's file name, e.g. '2026-Aug-30_Sun_01.png'.
 
-    The date chip scrolls away with the list, so only the first screenful of a
-    day carries the date on it. The file name carries it for the rest — with
-    the weekday, because a lost week of work is argued about in weekdays — and
-    the number is padded so the screens of a day stay in screen order in a
-    folder listing.
+    The day bar carries the date on every screen of a day — measured, it sits
+    above the strip that scrolls — but a file that gets separated from its
+    folder has only its name, so the name carries the date too. The weekday is
+    there because a lost week of work is argued about in weekdays, and the
+    number is padded so the screens of a day stay in screen order in a folder
+    listing.
 
     A day the phone never confirmed the date of is named as such. A screenshot
     filed under the wrong date is worse than one that is missing, and this

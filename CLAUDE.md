@@ -72,11 +72,16 @@ is tried again. A day the phone never confirmed the date of keeps its screens, n
 `_unconfirmed` — check those by eye before anyone else sees them.
 
 A day does not fit on one screen, so a day is a numbered series of screens. Consecutive
-screens overlap by more than half, because the swipe that walks the day is the one measured
-to work on this phone (`extract.scroll_step`, 80% of the screen up to 35%) and is not worth
-trading for fewer files. The images are never edited — a screenshot that has been drawn on
-stops being evidence of anything — so the date, which scrolls away with the list after the
-first screen, is carried by the file name and by `index.txt`.
+screens overlap by about 40%: `extract.scroll_step` travels 58% of the list's visible
+height, and the rest is the overlap that keeps a row from falling down the seam between two
+screens. A screen that shares no row with the one before it is named in the log and marked
+in `index.txt` — with that much overlap it should not happen, and if it does, the folder
+has a hole in it that whoever reads it needs to know about.
+
+The images are never edited — a screenshot that has been drawn on stops being evidence of
+anything. The date is on every screen anyway, since the day bar sits above the part that
+scrolls; the file name carries it as well, for a screen that gets separated from its
+folder.
 
 Make the sheet again from an export that already exists, without touching the phone. With no
 flags it takes the newest finished export in `exports/` and writes the CSV beside it, under
@@ -225,12 +230,29 @@ Measured, therefore settled:
   stops on a chrome button ("Backup enabled."). Nothing in the list can be selected before
   it is activated. Touch is the only way in. Do not re-propose focus navigation.
 - **Rows are virtual accessibility nodes of a web page**, not Android views.
-- **The date chip scrolls away with the list.** Measured on 2026-Aug-25: the first day
-  scraped fine and the six after it failed with "Calendar control not found". Collecting a
-  day leaves the list at the bottom, and at the bottom the tree carries no date row at all
-  — the chip is part of the same web page, not Android chrome. The day does not go
-  anywhere and the calendar is still reachable; the list has to be swiped back to its
-  first row before anything in the app bar can be tapped.
+- **Only the bottom 42% of the screen scrolls.** Measured 2026-Sep-24 from two
+  screenshots of the same day at different scroll positions: every pixel above
+  y = 1409 (0.585 of the 2410 px screen) was identical in both. The status bar, the
+  Timeline header, the Day/Trips/Insights tab strip, the whole map, the Re-center chip
+  and the day bar `‹ Sun, Aug 30, 2026 ▾ ›` do not move. The day list scrolls in the
+  1001 px below them.
+
+  Two things follow, and both cost a rewrite to learn: a scrolling gesture has to
+  start **and end** inside that strip, or its second half is delivered to the map; and
+  one swipe must travel less than 1001 px, or the list moves more than a screenful and
+  rows come out cut in half or missed. `extract.list_band` is where those numbers live.
+
+- **The date bar is drawn on every screen of a day**, top or bottom — it is above the
+  scrolling strip. This does not contradict the 2026-Aug-25 note below, which was about
+  the accessibility tree, not the pixels: a bar that is drawn may still be absent from
+  the tree. Which of the two it is has not been read off a dump.
+
+- **The date chip is missing from the tree at the bottom of a day.** Measured on
+  2026-Aug-25: the first day scraped fine and the six after it failed with "Calendar
+  control not found". Collecting a day leaves the list at the bottom, and at the bottom
+  the tree carried no date row. The day does not go anywhere and the calendar is still
+  reachable; the list has to be swiped back to its first row before anything in the app
+  bar can be tapped.
 - **The day has a bar of its own: `‹ Tue, Aug 11, 2026 ▾ ›`.** The date names the open
   day — the log read `Day 2026-08-15 is showing: 'Sat, Aug 15, 2026'` — the arrows either
   side step one day, and tapping the date opens the month calendar. So the calendar is
@@ -471,7 +493,7 @@ src/timeline_scraper/
     adb.py      — adb wrappers: devices, shell, tap, swipe, keyevent, dump_ui, screencap
     nav.py      — launch Maps, navigate to Timeline by accessibility tree text
     model.py    — Visit / Trip / Day dataclasses + JSON serialization
-    extract.py  — UI dump -> ordered descriptions, the measured scroll, bounds helper
+    extract.py  — UI dump -> ordered descriptions, the measured scroll band, bounds helpers
     shots.py    — a day photographed screen by screen, and the folder's index
     parse.py    — descriptions -> visits and trips, endpoint linking
     naming.py   — export file names and the report's date header, English month table

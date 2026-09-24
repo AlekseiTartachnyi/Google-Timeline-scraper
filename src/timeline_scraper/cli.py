@@ -508,7 +508,7 @@ def cmd_shots(args: argparse.Namespace) -> int:
             try:
                 confirmed = go_to_date(target, serial=serial, dump_dir=shots_dir)
                 time.sleep(_DAY_SETTLE_S)
-                screens = capture_day(
+                screens, gaps = capture_day(
                     target, shots_dir, serial=serial, confirmed=confirmed
                 )
             except (ADBError, RuntimeError) as exc:
@@ -541,6 +541,7 @@ def cmd_shots(args: argparse.Namespace) -> int:
                     status=STATUS_OK if screens else STATUS_EMPTY,
                     screens=screens,
                     confirmed=confirmed,
+                    gaps=gaps,
                 )
             )
             run.sort_days()
@@ -569,6 +570,14 @@ def cmd_shots(args: argparse.Namespace) -> int:
             "named 'unconfirmed' and have to be checked by eye before anyone sees them",
             len(unconfirmed),
             ", ".join(unconfirmed),
+        )
+    gapped = [d.date for d in run.days if d.gaps]
+    if gapped:
+        logger.warning(
+            "%d day(s) have screens that may not meet, so a row could be missing "
+            "between them: %s — index.txt marks which screens",
+            len(gapped),
+            ", ".join(gapped),
         )
 
     return 1 if len(failed) == len(run.days) else 0
