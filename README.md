@@ -72,7 +72,8 @@ python -m timeline_scraper scrape --month 2026-07 --routes
 python -m timeline_scraper scrape --start 2026-05-01 --end 2026-06-07 --out ~/timeline-exports/
 
 # Photograph a range of days instead of reading them: every screenful of every
-# day, saved as-is. The dates are never assumed — spell them out, or use --month
+# day, saved as-is, one folder per day. The dates are never assumed — spell
+# them out, or use --month
 python -m timeline_scraper shots --start 2026-08-30 --end 2026-09-05
 
 # Flatten the JSON into a CSV table

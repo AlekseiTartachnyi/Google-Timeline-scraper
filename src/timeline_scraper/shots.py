@@ -22,7 +22,7 @@ from typing import Any
 from .adb import dump_ui, screencap
 from .extract import flatten, list_band, list_rows, scroll_step, scroll_to_top
 from .model import STATUS_EMPTY, STATUS_FAILED, STATUS_OK
-from .naming import header_date, shot_name
+from .naming import day_dir_name, header_date, shot_name
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,8 @@ def capture_day(
     stops there.
     """
     scroll_to_top(serial=serial)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    day_dir = out_dir / day_dir_name(target)
+    day_dir.mkdir(parents=True, exist_ok=True)
     _, top, _ = list_band(serial=serial)
 
     names: list[str] = []
@@ -169,7 +170,7 @@ def capture_day(
             gaps.append(index)
 
         name = shot_name(target, index, confirmed)
-        (out_dir / name).write_bytes(shot)
+        (day_dir / name).write_bytes(shot)
         names.append(name)
         previous_shot = shot
         previous_rows = rows
@@ -196,24 +197,29 @@ def capture_day(
 
 
 def discard_day(target: date_type, out_dir: Path) -> int:
-    """Delete any screens already on disk for one day. Returns how many went.
+    """Delete the day's folder if an earlier try left one. Returns screens removed.
 
     A day that failed part-way leaves the screens it did reach. Those are the
     top of a day whose bottom is unknown, and a partial day that reads as a
-    whole one is exactly the gap this tool exists to make visible, so they are
-    cleared before the day is tried again.
+    whole one is exactly the gap this tool exists to make visible, so they go
+    before the day is tried again.
     """
-    if not out_dir.is_dir():
+    day_dir = out_dir / day_dir_name(target)
+    if not day_dir.is_dir():
         return 0
-    # The date in a screen's name is written '2026-Aug-30', not as an ISO
-    # string, so the pattern comes off the same builder rather than from a
-    # second guess at the shape.
-    prefix = shot_name(target, 1).split("_")[0]
-    stale = sorted(out_dir.glob(f"{prefix}_*.png"))
+    stale = sorted(day_dir.glob("*.png"))
     for path in stale:
         path.unlink(missing_ok=True)
+    # Anything else in there was not put there by this run; the folder only
+    # goes if emptying it emptied it.
+    try:
+        day_dir.rmdir()
+    except OSError:
+        logger.warning("%s still holds files this run did not write; left in place", day_dir)
     if stale:
-        logger.info("Cleared %d screen(s) left by an earlier try at %s", len(stale), target.isoformat())
+        logger.info(
+            "Cleared %d screen(s) left by an earlier try at %s", len(stale), target.isoformat()
+        )
     return len(stale)
 
 
@@ -250,7 +256,8 @@ def render_index(run: ShotRun) -> str:
     lines = [
         f"Timeline screens, {run.first_date} to {run.last_date}",
         "",
-        "Every screenful of every day, in the order it appears on the phone.",
+        "One folder per day, and inside it every screenful of that day in the",
+        "order it appears on the phone.",
         "The day bar reading the date sits above the part that scrolls, so it",
         "is on every screen of a day, not only the first. The file name carries",
         "the date as well, so a screen that gets separated from the folder can",
@@ -268,9 +275,10 @@ def render_index(run: ShotRun) -> str:
             count = len(day.screens)
             note = "" if day.confirmed else "  (the phone never confirmed this date)"
             lines.append(f"{head}  —  {count} screen(s){note}")
+            lines.append(f"    {day_dir_name(when)}/")
             for position, name in enumerate(day.screens, start=1):
                 mark = "   <- may not meet the screen above" if position in day.gaps else ""
-                lines.append(f"    {name}{mark}")
+                lines.append(f"        {name}{mark}")
         lines.append("")
 
     captured = [d for d in run.days if d.status != STATUS_FAILED]

@@ -106,21 +106,34 @@ def shots_dir_name(first: date_type, last: date_type) -> str:
     return f"{_SHOTS_PREFIX}{range_name(first, last)}"
 
 
+def day_dir_name(day: date_type) -> str:
+    """Return the folder name holding one day's screens, e.g. '2026-Jul-02_Thu'.
+
+    A day runs to several screens, and a range runs to weeks of days. Left in
+    one flat folder that is hundreds of files to scroll past to find a Tuesday;
+    a folder per day is what makes a range readable by the person who opens it.
+
+    The day the phone could not confirm is not marked here — its screens carry
+    that on their own names, and keeping the folder name a plain function of
+    the date is what lets a re-run find the day it is replacing.
+    """
+    return f"{stamp_date(day)}_{weekday(day)}"
+
+
 def shot_name(day: date_type, index: int, confirmed: bool = True) -> str:
     """Return one screenshot's file name, e.g. '2026-Aug-30_Sun_01.png'.
 
-    The day bar carries the date on every screen of a day — measured, it sits
-    above the strip that scrolls — but a file that gets separated from its
-    folder has only its name, so the name carries the date too. The weekday is
-    there because a lost week of work is argued about in weekdays, and the
-    number is padded so the screens of a day stay in screen order in a folder
-    listing.
+    The name repeats the day folder it sits in, so a screen that gets copied
+    out of that folder — into an email, onto a desk — can still be placed. The
+    weekday is there because a lost week of work is argued about in weekdays,
+    and the number is padded so the screens of a day stay in screen order in a
+    folder listing.
 
     A day the phone never confirmed the date of is named as such. A screenshot
     filed under the wrong date is worse than one that is missing, and this
     ends up in front of an insurer.
     """
-    stem = f"{stamp_date(day)}_{weekday(day)}_{index:02d}"
+    stem = f"{day_dir_name(day)}_{index:02d}"
     if not confirmed:
         stem += "_unconfirmed"
     return f"{stem}.png"

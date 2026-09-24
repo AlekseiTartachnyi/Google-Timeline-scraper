@@ -168,17 +168,30 @@ The name comes from the range, not from the flag that asked for it, so `--month 
 and the two dates spelled out resume the same partial file and replace the same export.
 
 Screenshots go in a folder of their own, named for the same range and never mixed in with
-the files that carry numbers:
+the files that carry numbers. Inside it, one folder per day — a day runs to several screens
+and a range runs to weeks of days, and in one flat folder that is hundreds of files to
+scroll past to find a Tuesday:
 
 ```
 exports/
-    screens_2026-Aug-30 - 2026-Sep-05/
-        2026-Aug-30_Sun_01.png     the first screen of the day, the one with the date on it
-        2026-Aug-30_Sun_02.png     and down the day from there
-        2026-Sep-03_Thu_01_unconfirmed.png    the phone never named this date
+    screens_2026-Jul-02 - 2026-Aug-27/
+        2026-Jul-02_Thu/
+            2026-Jul-02_Thu_01.png     the top of the day
+            2026-Jul-02_Thu_02.png     and down the day from there
+        2026-Jul-03_Fri/
+            2026-Jul-03_Fri_01_unconfirmed.png   the phone never named this date
         index.json                 what the next run resumes from
         index.txt                  what each day holds, for whoever opens the folder
 ```
+
+The day folder is named for the date alone, never for whether the date was confirmed: a
+re-run has to be able to find the folder it is replacing. The screens inside carry the
+`_unconfirmed` mark, so opening the folder still shows it. A day that fails takes its whole
+folder with it before it is retried — half a day that reads as a whole one is the one
+mistake this folder cannot afford.
+
+A screen's name repeats its folder, so a screen copied out of the folder — into an email,
+onto a desk — can still be placed.
 
 `route-cache.json` is keyed by the addresses that were driven between, so it is personal
 data and lives with the exports, outside the repo. Deleting it costs money, not correctness:
